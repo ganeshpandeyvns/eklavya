@@ -66,6 +66,40 @@ For existing projects, Eklavya:
 
 Both flows converge at: Demo → Client Feedback → Build cycle
 
+### Demo Strategy (Sales-Focused)
+
+**Pre-Contract Demos (Win the client):**
+```
+DEMO₀ "The Wow Demo"        DEMO₁ "The Trust Demo"         CONTRACT
+  │                              │                             │
+  ▼                              ▼                             ▼
+Beautiful UI                 Core feature WORKS            Client signs!
+Smooth animations            Real-ish data flow
+Clickable prototype          Happy path complete
+(fake data, no backend)      (still mock backend)
+
+Time: 20-30 min              Time: 30-45 min
+Cost: $8-15                  Cost: $15-25
+Creates: 40% foundation      Adds: 20% more foundation
+```
+
+**Always tell admin BEFORE building what demo will contain:**
+- What screens/features WILL be shown
+- What will NOT be included (saves for later)
+- Scaffolding this demo creates (reused in real build)
+- Estimated time and cost
+
+**Post-Contract Demos (Optional progress checks):**
+- Demo₂+ at major milestones
+- Admin can skip if confident
+- Real build happens after contract
+
+**Scaffolding Reuse:**
+- Demo₀ creates 40% of foundation (UI, routing, design system)
+- Demo₁ adds 20% more (core feature, data flow)
+- Full build completes remaining 40% (auth, all features, tests)
+- Pre-contract demos are NOT wasted - they become project foundation
+
 ## Documentation Structure
 
 | Document | Purpose |
