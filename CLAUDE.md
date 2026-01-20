@@ -147,12 +147,37 @@ This verification applies to:
 - Every project Eklavya creates autonomously
 - Any agent spawned during project execution
 
+## Project Lifecycle with Demo Phase
+
+```
+PLAN → DEMO → BUILD → DONE
+  │      │      │
+  │      │      └─ Full implementation with real data
+  │      └─ Quick interactive prototype (15-30 min) to validate vision
+  └─ Text description of what will be built
+```
+
+**Why Demo Matters:**
+- Plan = "Sounds good" (10% confidence)
+- Demo = "Looks right!" (80% confidence) ← Catch mismatches EARLY
+- Build = "Perfect!" (100% confidence)
+
+**Demo is NOT throwaway** - it becomes the scaffold for the real build. Layout, components, routing are reused; only mock data/APIs get replaced.
+
+**Optional Milestone Demos**: During build phase, users can enable demo checkpoints at foundation, core feature, or pre-polish stages.
+
+This applies to:
+- All projects Eklavya builds for users
+- Eklavya platform development itself
+
 ## Key Principles
 
 1. **Autonomy After Approval** - Human approves plan once, then agents work independently
-2. **Everything Logged** - All actions recorded for learning
-3. **Fail Gracefully** - Checkpoints enable recovery from any failure
-4. **Cost Aware** - Hard limits prevent runaway spending
-5. **Self-Improving** - RL evolves prompts based on outcomes
-6. **Incremental Progress** - Commit and push changes frequently, not in large batches
-7. **Verify Before Acting** - Always confirm prerequisites before starting work
+2. **Demo Before Build** - Always create quick interactive demo to validate before full implementation
+3. **Everything Logged** - All actions recorded for learning
+4. **Fail Gracefully** - Checkpoints enable recovery from any failure
+5. **Cost Aware** - Hard limits prevent runaway spending
+6. **Self-Improving** - RL evolves prompts based on outcomes
+7. **Incremental Progress** - Commit and push changes frequently, not in large batches
+8. **Verify Before Acting** - Always confirm prerequisites before starting work
+9. **Parallel When Possible** - Spawn multiple agents simultaneously for faster delivery
