@@ -333,17 +333,75 @@ This applies to:
 
 1. **Clean restart** - Kill any existing services for this project
 2. **Start services** - Bring up frontend/backend servers
-3. **Provide URL** - Tell admin the URL to access the demo
-4. **Wait for review** - Admin tests the demo before deciding next steps
+3. **Run autonomous tester** - Verify demo actually works (see below)
+4. **Provide URL** - Tell admin the URL to access the demo
+5. **Wait for review** - Admin tests the demo after tester confirms it works
 
 ```bash
 # Example for web projects:
 pkill -f "project-name" 2>/dev/null  # Clean up
 npm run dev                           # Start server
-# → "Demo ready at http://localhost:3000"
+# Run tester agent to verify
+# → "Demo verified and ready at http://localhost:3000"
 ```
 
 This is MANDATORY - admin must be able to see and interact with every demo immediately after it's built.
+
+## Autonomous Demo Tester (CRITICAL)
+
+**Demo is a reputation risk. If system says "demo ready", it MUST work.**
+
+Before declaring ANY demo ready, an autonomous tester agent MUST verify:
+
+### Pre-Demo Verification Checklist
+1. **Process Check**
+   - Server process is running
+   - Correct port is listening
+   - No crash loops or errors in logs
+
+2. **URL Accessibility**
+   - Base URL responds (http://localhost:PORT)
+   - Returns valid HTML (not error page)
+   - Response time is acceptable (<3s)
+
+3. **Page Verification** (for each page in demo)
+   - Page loads without errors
+   - No JavaScript console errors
+   - Key elements are present
+   - Interactive elements respond
+
+4. **User Flow Testing**
+   - Navigation works between pages
+   - Forms submit (even if mock)
+   - Buttons trigger expected actions
+   - No broken links or images
+
+5. **Responsive Check**
+   - Desktop viewport works
+   - Mobile viewport works
+   - No layout breaks
+
+### Tester Agent Implementation
+```
+Tester Agent spins up in separate terminal:
+├── Checks process health
+├── Hits all URLs with curl/fetch
+├── Uses Playwright for browser testing
+├── Captures screenshots of each page
+├── Reports: PASS/FAIL with details
+└── Only if ALL PASS → "Demo Ready"
+```
+
+### Failure Handling
+- If ANY check fails → Demo NOT ready
+- Fix issues automatically if possible
+- Re-run full test suite
+- Only declare ready after clean pass
+
+This applies to:
+- Eklavya's own demos (Demo₀, Demo₁, etc.)
+- All client project demos Eklavya builds
+- Full builds before declaring "complete"
 
 ## Fully Autonomous Operations
 
@@ -360,3 +418,56 @@ This applies to:
 - All projects Eklavya creates
 - Demo builds and full builds
 - Testing and deployment
+
+## Autonomous Agent Scripts (Critical Pattern)
+
+**Problem Solved**: Claude Code permission prompts interrupt autonomous workflows.
+
+**Solution**: Standalone executable shell scripts that run independently in separate terminals.
+
+### Script Location
+```
+eklavya/scripts/
+├── run-dev-server.sh      # Start web frontend
+├── run-demo-tester.sh     # Verify demo is ready
+├── run-overnight.sh       # Full overnight autonomous build
+└── agents/                # Individual agent scripts
+    └── README.md
+```
+
+### Usage Pattern
+```bash
+# In Terminal 1 - Start server
+./scripts/run-dev-server.sh
+
+# In Terminal 2 - Run tester (after server is up)
+./scripts/run-demo-tester.sh
+
+# Or run everything overnight
+nohup ./scripts/run-overnight.sh > logs/overnight.log 2>&1 &
+```
+
+### Why This Works
+1. Scripts are pre-written and executable (`chmod +x`)
+2. Run in their own process/terminal
+3. No Claude Code permission prompts
+4. Output goes to `logs/` directory
+5. Results saved to `test-results/`
+6. Scripts can spawn other scripts (orchestration)
+
+### For Every Demo (Eklavya AND client projects)
+1. Build creates/updates these scripts
+2. Server script starts the app
+3. Tester script verifies everything works
+4. Only declare "demo ready" after tester passes
+5. Admin runs scripts in their terminal - zero prompts
+
+### Demo Verification Output
+```
+╔════════════════════════════════════════╗
+║     ✓ DEMO₀ VERIFIED AND READY         ║
+╚════════════════════════════════════════╝
+
+URL: http://localhost:3000
+Screenshots: test-results/screenshots/
+```
