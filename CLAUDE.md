@@ -326,3 +326,37 @@ This applies to:
 8. **Verify Before Acting** - Always confirm prerequisites before starting work
 9. **Parallel When Possible** - Spawn multiple agents simultaneously for faster delivery
 10. **Professional Code Only** - All output matches senior architect quality standards
+
+## Demo Delivery Rule
+
+**After every demo completion (for Eklavya AND all projects Eklavya builds):**
+
+1. **Clean restart** - Kill any existing services for this project
+2. **Start services** - Bring up frontend/backend servers
+3. **Provide URL** - Tell admin the URL to access the demo
+4. **Wait for review** - Admin tests the demo before deciding next steps
+
+```bash
+# Example for web projects:
+pkill -f "project-name" 2>/dev/null  # Clean up
+npm run dev                           # Start server
+# → "Demo ready at http://localhost:3000"
+```
+
+This is MANDATORY - admin must be able to see and interact with every demo immediately after it's built.
+
+## Fully Autonomous Operations
+
+**All operations are pre-authorized** - no permission prompts for:
+- All bash/terminal commands (npm, git, node, etc.)
+- File read/write/edit operations
+- Starting/stopping services
+- Package installation
+- Build commands
+- Any tooling needed to complete the task
+
+This applies to:
+- Building Eklavya itself
+- All projects Eklavya creates
+- Demo builds and full builds
+- Testing and deployment
