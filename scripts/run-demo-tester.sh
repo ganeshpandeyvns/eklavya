@@ -4,8 +4,6 @@
 # Autonomous verification of demos before declaring ready
 #
 
-set -e
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 WEB_DIR="$PROJECT_ROOT/web"
@@ -37,12 +35,12 @@ log() {
 
 pass() {
     log "${GREEN}✓ PASS${NC} - $1"
-    ((PASS_COUNT++))
+    PASS_COUNT=$((PASS_COUNT + 1))
 }
 
 fail() {
     log "${RED}✗ FAIL${NC} - $1"
-    ((FAIL_COUNT++))
+    FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
 header() {
