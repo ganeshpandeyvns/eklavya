@@ -43,6 +43,29 @@ Demo Ready → YOU review first → YOU show to client → Client feedback → Y
 ```
 You control the client relationship. Clients never interact with the system directly.
 
+### Two Project Types
+
+**1. New Project (From Scratch)**
+```
+Client: "I have an idea"
+→ Describe project → Generate architecture → Admin approves → Build Demo → Show client → Iterate
+```
+
+**2. Existing Project (Import & Fix)**
+```
+Client: "I have code, it's stuck"
+→ Import codebase → Analyze & health report → Eklavya asks questions → Recovery plan → Admin approves → Build Demo → Show client → Iterate
+```
+
+For existing projects, Eklavya:
+- Analyzes codebase health (tech stack, structure, issues)
+- Identifies what's working vs what needs attention
+- Asks the right questions to understand goals
+- Generates a recovery/completion plan
+- Prioritizes fixes based on client needs
+
+Both flows converge at: Demo → Client Feedback → Build cycle
+
 ## Documentation Structure
 
 | Document | Purpose |
