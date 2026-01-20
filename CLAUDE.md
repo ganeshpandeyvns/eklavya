@@ -6,6 +6,43 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Eklavya is an autonomous agent orchestration platform using Reinforcement Learning to create self-improving AI agents. The platform follows the principle that **the system should be capable of building itself**.
 
+**Business Model**: Admin (you) runs a software development business. Clients come to you with project requests. You use Eklavya to build their projects efficiently with autonomous AI agents. Agents work 24/7 while you sleep. You review demos, show clients, get feedback, and continue.
+
+## Admin Operations (Business Features)
+
+### Multi-Project Management
+- Dashboard shows ALL client projects at once
+- Grouped by status: Needs Attention → In Progress → Completed
+- Budget tracking per project with profit margin visibility
+
+### Smart Notifications (Only When Needed)
+| Level | When | Action |
+|-------|------|--------|
+| 🔴 Critical | Build failed, budget exceeded | SMS + Push |
+| 🟡 Needs Input | Demo ready, approval needed | Push + Email |
+| 🟢 Info | Milestone complete | Push only |
+| ⚪ Silent | Agent progress | Log only |
+
+### Escalation Policy
+**Agents STOP and wait when**: Demo ready, architecture approval needed, budget threshold, build failure after 3 retries, external API integration
+
+**Agents PROCEED autonomously when**: Writing code within plan, running tests, fixing tests, formatting, minor refactoring, git commits
+
+### Availability Mode
+- 🟢 Active (full notifications)
+- 🟡 Busy (urgent only)
+- 😴 Away (critical only) - agents keep working, queue decisions
+- 🔴 DND (emergencies only)
+
+### Client Approval Flow (Option A)
+```
+Demo Ready → YOU review first → YOU show to client → Client feedback → YOU decide
+                   │                    │                   │              │
+              "Looks good"         Screen share        "Love it!" or   Continue/
+                                   or send link        "Change X"      Adjust/Skip
+```
+You control the client relationship. Clients never interact with the system directly.
+
 ## Documentation Structure
 
 | Document | Purpose |
