@@ -150,25 +150,52 @@ This verification applies to:
 ## Project Lifecycle with Demo Phase
 
 ```
-PLAN → DEMO → BUILD → DONE
-  │      │      │
-  │      │      └─ Full implementation with real data
-  │      └─ Quick interactive prototype (15-30 min) to validate vision
-  └─ Text description of what will be built
+DESCRIBE → PLAN/ARCH → [ADMIN APPROVAL] → DEMO → [ADMIN DECISION] → BUILD → DONE
+               │              │              │            │
+               │              │              │            ├─→ "More demos" → Demo₂
+               │              │              │            ├─→ "Skip to build" → BUILD
+               │              │              │            └─→ "Adjust" → Revise demo
+               │              │              │
+               │              │              └─ Interactive prototype (15-30 min)
+               │              │                 Client sees something CONCRETE
+               │              │                 Validates it solves their problem
+               │              │
+               │              └─ GATE: Architecture, Plan, Roadmap, Key Features
+               │                 MUST be approved by Admin before any demo build
+               │
+               └─ Technical design, task breakdown, feature list
 ```
 
 **Why Demo Matters:**
-- Plan = "Sounds good" (10% confidence)
-- Demo = "Looks right!" (80% confidence) ← Catch mismatches EARLY
-- Build = "Perfect!" (100% confidence)
+- Client is unsure and wants to see something concrete before deciding
+- Demo proves the solution actually solves their problem
+- Catch mismatches EARLY before investing in full build
+- Iterative demos = course correction opportunities
+
+**Admin Approval Gates:**
+1. **Before Demo Build**: Architecture, plan, roadmap, key features must be approved
+2. **After Each Demo**: Admin decides next step:
+   - Continue to next milestone demo
+   - Skip remaining demos → go directly to full build
+   - Request adjustments → revise and rebuild demo
 
 **Demo is NOT throwaway** - it becomes the scaffold for the real build. Layout, components, routing are reused; only mock data/APIs get replaced.
 
-**Optional Milestone Demos**: During build phase, users can enable demo checkpoints at foundation, core feature, or pre-polish stages.
+**Milestone Demos** (optional checkpoints during development):
+- After foundation
+- After core feature
+- Before final polish
+- Admin can skip to full build after 1st or 2nd demo if confident
+
+**Parallel Autonomous Agents**:
+All development (demo and full build) uses logically divided parallel autonomous agents:
+- Agents work from one milestone to another
+- OR from 1st demo directly to final product
+- Division based on what makes sense for the specific product being built
 
 This applies to:
-- All projects Eklavya builds for users
-- Eklavya platform development itself
+- All projects Eklavya builds for clients
+- **Eklavya platform development itself**
 
 ## Key Principles
 
