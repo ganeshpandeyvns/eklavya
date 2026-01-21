@@ -330,6 +330,27 @@ export async function getPromptStats(
 ): Promise<void> {
   const db = getDatabase();
 
+  // Valid agent types
+  const validAgentTypes = [
+    'orchestrator', 'architect', 'developer', 'tester',
+    'qa', 'pm', 'uat', 'sre', 'monitor', 'mentor'
+  ];
+
+  // Return empty stats for invalid agent types
+  if (!validAgentTypes.includes(agentType)) {
+    const emptyStats = {
+      agentType,
+      totalVersions: 0,
+      totalUses: 0,
+      avgThompsonScore: 0,
+      productionVersion: null,
+      versions: [],
+    };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(emptyStats));
+    return;
+  }
+
   try {
     const promptsResult = await db.query<{
       id: string;
