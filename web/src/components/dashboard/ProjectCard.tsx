@@ -10,7 +10,7 @@ interface ProjectCardProps {
 }
 
 const statusConfig: Record<
-  Project["status"],
+  string,
   { label: string; color: string; bgColor: string; dotColor: string }
 > = {
   planning: {
@@ -18,6 +18,12 @@ const statusConfig: Record<
     color: "text-gray-700",
     bgColor: "bg-gray-100",
     dotColor: "bg-gray-500",
+  },
+  active: {
+    label: "Active",
+    color: "text-blue-700",
+    bgColor: "bg-blue-100",
+    dotColor: "bg-blue-500",
   },
   demo_building: {
     label: "Building Demo",
@@ -51,8 +57,16 @@ const statusConfig: Record<
   },
 };
 
+// Default fallback for unknown statuses
+const defaultStatus = {
+  label: "Unknown",
+  color: "text-gray-700",
+  bgColor: "bg-gray-100",
+  dotColor: "bg-gray-500",
+};
+
 export function ProjectCard({ project }: ProjectCardProps) {
-  const status = statusConfig[project.status];
+  const status = statusConfig[project.status] || defaultStatus;
   const budgetPercent = Math.round(
     (project.budgetSpent / project.budgetLimit) * 100
   );

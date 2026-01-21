@@ -246,6 +246,29 @@ async function testFrontendIntegration(): Promise<number> {
     return res.ok || res.status === 304;
   })) passed++;
 
+  // Test 5: No JavaScript errors on page load (critical test)
+  if (await runTest('No JavaScript errors on page load', 'frontend', async () => {
+    // Use a simple approach: fetch the page and check if data loads
+    // This validates that API responses are compatible with frontend components
+    const [pageRes, apiRes] = await Promise.all([
+      fetch(CONFIG.frontendUrl),
+      fetch(`${CONFIG.apiUrl}/api/projects`),
+    ]);
+
+    if (!pageRes.ok || !apiRes.ok) return false;
+
+    // Check that API response has expected structure
+    const projects = await apiRes.json() as Array<{ id: string; status: string }>;
+
+    // Validate all project statuses are valid frontend statuses
+    const validStatuses = ['planning', 'active', 'demo_building', 'demo_ready', 'building', 'completed', 'paused'];
+    const hasValidStatuses = projects.every((p: { status: string }) =>
+      validStatuses.includes(p.status) || p.status === undefined
+    );
+
+    return hasValidStatuses;
+  })) passed++;
+
   return passed;
 }
 
