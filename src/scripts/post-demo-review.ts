@@ -296,27 +296,41 @@ function parseArchitectOutput(output: string): ReviewResult['scores'] {
   let overallScore = 0;
   let grade = 'F';
 
-  // Parse code quality score
-  const qualityMatch = output.match(/Overall Score:\s*(\d+)/);
-  if (qualityMatch) codeQuality = parseInt(qualityMatch[1], 10);
+  // Parse code quality score - look for "Overall Score: XX/100" in quality section
+  const qualityScoreMatch = output.match(/Overall Score:\s*(\d+)\/100/);
+  if (qualityScoreMatch) codeQuality = parseInt(qualityScoreMatch[1], 10);
 
-  // Parse test coverage
-  const coverageMatch = output.match(/(?:File Coverage|Test Coverage):\s*([\d.]+)%/);
+  // Parse test coverage (file coverage)
+  const coverageMatch = output.match(/File Coverage:\s*([\d.]+)%/);
   if (coverageMatch) testCoverage = parseFloat(coverageMatch[1]);
 
   // Parse requirements coverage
-  const reqMatch = output.match(/Coverage:\s*([\d.]+)%/);
-  if (reqMatch) requirementsCoverage = parseFloat(reqMatch[1]);
+  const reqMatch = output.match(/Requirements Coverage\s*│\s*([\d.]+)%/);
+  if (reqMatch) {
+    requirementsCoverage = parseFloat(reqMatch[1]);
+  } else {
+    // Fallback to simpler pattern
+    const simpleReqMatch = output.match(/Coverage:\s*([\d.]+)%/);
+    if (simpleReqMatch) requirementsCoverage = parseFloat(simpleReqMatch[1]);
+  }
 
   // Parse critical issues
   const criticalMatch = output.match(/Critical:\s*(\d+)/);
   if (criticalMatch) criticalIssues = parseInt(criticalMatch[1], 10);
 
-  // Parse overall score and grade
+  // Parse overall score and grade - more flexible pattern
   const overallMatch = output.match(/Overall Score:\s*(\d+)\/100\s*\(Grade:\s*([A-F])\)/);
   if (overallMatch) {
     overallScore = parseInt(overallMatch[1], 10);
     grade = overallMatch[2];
+  } else {
+    // Calculate overall from components if parsing failed
+    overallScore = Math.round((codeQuality + testCoverage + requirementsCoverage) / 3);
+    if (overallScore >= 90) grade = 'A';
+    else if (overallScore >= 80) grade = 'B';
+    else if (overallScore >= 70) grade = 'C';
+    else if (overallScore >= 60) grade = 'D';
+    else grade = 'F';
   }
 
   return {

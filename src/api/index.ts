@@ -47,13 +47,14 @@ import {
   getManagerStatus,
   spawnAllAgents,
   terminateAllAgents,
-  getAggregateResources,
+  getAggregateResources as getAggregateResourcesLifecycle,
   garbageCollect,
   startManager,
   stopManager,
   getAgentHealthHistory,
   getAgentResourceHistory,
 } from './lifecycle.js';
+import { createCoordinator, AgentCoordinator } from '../core/coordination/index.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -155,6 +156,31 @@ export class ApiServer {
     this.route('POST', '/api/agent-manager/gc', this.garbageCollectHandler);
     this.route('POST', '/api/agent-manager/start', this.startManagerHandler);
     this.route('POST', '/api/agent-manager/stop', this.stopManagerHandler);
+
+    // Demo₅: Multi-Agent Coordination
+    this.route('POST', '/api/coordination/:projectId/initialize', this.initializeCoordinationHandler);
+    this.route('POST', '/api/coordination/:projectId/spawn-multiple', this.spawnMultipleAgentsHandler);
+    this.route('GET', '/api/coordination/:projectId/agents', this.getCoordinatedAgentsHandler);
+    this.route('GET', '/api/coordination/:projectId/status', this.getCoordinationStatusHandler);
+    this.route('GET', '/api/coordination/:projectId/can-spawn', this.canSpawnAgentHandler);
+    this.route('POST', '/api/coordination/:projectId/assign', this.assignTasksHandler);
+    this.route('POST', '/api/coordination/:projectId/route-task', this.routeTaskHandler);
+    this.route('POST', '/api/coordination/:projectId/rebalance', this.rebalanceTasksHandler);
+    this.route('DELETE', '/api/coordination/:projectId/agents/:agentId', this.terminateCoordinatedAgentHandler);
+
+    // Demo₅: File Locks
+    this.route('POST', '/api/coordination/:projectId/locks/acquire', this.acquireLockHandler);
+    this.route('DELETE', '/api/coordination/:projectId/locks/:lockId', this.releaseLockHandler);
+    this.route('GET', '/api/coordination/:projectId/locks', this.getLocksHandler);
+    this.route('POST', '/api/coordination/:projectId/locks/check', this.checkLockHandler);
+
+    // Demo₅: Conflicts
+    this.route('GET', '/api/coordination/:projectId/conflicts', this.getConflictsHandler);
+    this.route('POST', '/api/coordination/:projectId/conflicts/detect', this.detectConflictHandler);
+    this.route('POST', '/api/coordination/:projectId/conflicts/:conflictId/resolve', this.resolveConflictHandler);
+
+    // Demo₅: Messaging
+    this.route('POST', '/api/coordination/:projectId/relay', this.relayMessageHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -566,6 +592,299 @@ export class ApiServer {
 
   private async stopManagerHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     await stopManager(req, res);
+  }
+
+  // Demo₅: Multi-Agent Coordination handlers
+  private coordinators: Map<string, AgentCoordinator> = new Map();
+
+  private getOrCreateCoordinator(projectId: string): AgentCoordinator {
+    if (!this.coordinators.has(projectId)) {
+      const coordinator = createCoordinator({ projectId });
+      this.coordinators.set(projectId, coordinator);
+    }
+    return this.coordinators.get(projectId)!;
+  }
+
+  private async initializeCoordinationHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ maxConcurrentAgents?: number }>(req);
+
+      const coordinator = createCoordinator({
+        projectId,
+        maxConcurrentAgents: body.maxConcurrentAgents || 10,
+      });
+
+      await coordinator.initialize();
+      this.coordinators.set(projectId, coordinator);
+
+      this.sendJson(res, 200, { success: true, projectId, maxConcurrentAgents: body.maxConcurrentAgents || 10 });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async spawnMultipleAgentsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ agents: Array<{ type: string }> }>(req);
+
+      if (!body.agents || !Array.isArray(body.agents)) {
+        return this.sendJson(res, 400, { success: false, error: 'agents array is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const results = await coordinator.spawnAgents(body.agents as any);
+
+      this.sendJson(res, 200, {
+        success: true,
+        results,
+        spawned: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getCoordinatedAgentsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const agents = await coordinator.getActiveAgents();
+
+      this.sendJson(res, 200, { success: true, agents, count: agents.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getCoordinationStatusHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const status = await coordinator.getStatus();
+
+      this.sendJson(res, 200, { success: true, status });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async canSpawnAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const result = await coordinator.canSpawnAgent();
+
+      this.sendJson(res, 200, { success: true, ...result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async assignTasksHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ tasks: Array<{ id: string }> }>(req);
+
+      if (!body.tasks || !Array.isArray(body.tasks)) {
+        return this.sendJson(res, 400, { success: false, error: 'tasks array is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const results = await coordinator.assignTasks(body.tasks as any);
+
+      this.sendJson(res, 200, {
+        success: true,
+        results,
+        assigned: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async routeTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ taskId: string; preferredType?: string }>(req);
+
+      if (!body.taskId) {
+        return this.sendJson(res, 400, { success: false, error: 'taskId is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const agentId = await coordinator.routeTask(body.taskId, body.preferredType as any);
+
+      this.sendJson(res, 200, { success: !!agentId, agentId });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async rebalanceTasksHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const result = await coordinator.rebalance();
+
+      this.sendJson(res, 200, { success: true, ...result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async terminateCoordinatedAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId, agentId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const success = await coordinator.terminateAgent(agentId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₅: File Lock handlers
+  private async acquireLockHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ agentId: string; filePath: string; durationMinutes?: number }>(req);
+
+      if (!body.agentId || !body.filePath) {
+        return this.sendJson(res, 400, { success: false, error: 'agentId and filePath are required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const result = await coordinator.acquireLock(body.agentId, body.filePath, body.durationMinutes);
+
+      this.sendJson(res, 200, result);
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async releaseLockHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId, lockId } = params;
+      const body = await this.parseBody<{ agentId: string }>(req);
+
+      if (!body.agentId) {
+        return this.sendJson(res, 400, { success: false, error: 'agentId is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const success = await coordinator.releaseLock(lockId, body.agentId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getLocksHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const locks = await coordinator.getActiveLocks();
+
+      this.sendJson(res, 200, { success: true, locks, count: locks.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async checkLockHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ filePath: string }>(req);
+
+      if (!body.filePath) {
+        return this.sendJson(res, 400, { success: false, error: 'filePath is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const result = await coordinator.isFileLocked(body.filePath);
+
+      this.sendJson(res, 200, { success: true, ...result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₅: Conflict handlers
+  private async getConflictsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const conflicts = await coordinator.getPendingConflicts();
+
+      this.sendJson(res, 200, { success: true, conflicts, count: conflicts.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async detectConflictHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{ agentAId: string; agentBId: string; filePath: string; conflictType: string }>(req);
+
+      if (!body.agentAId || !body.agentBId || !body.filePath || !body.conflictType) {
+        return this.sendJson(res, 400, { success: false, error: 'agentAId, agentBId, filePath, and conflictType are required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const conflict = await coordinator.detectConflict(body.agentAId, body.agentBId, body.filePath, body.conflictType);
+
+      this.sendJson(res, 200, { success: true, conflict });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async resolveConflictHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId, conflictId } = params;
+      const body = await this.parseBody<{ resolution: string; resolvedBy: string }>(req);
+
+      if (!body.resolution || !body.resolvedBy) {
+        return this.sendJson(res, 400, { success: false, error: 'resolution and resolvedBy are required' });
+      }
+
+      if (!['merge', 'override_a', 'override_b', 'reject'].includes(body.resolution)) {
+        return this.sendJson(res, 400, { success: false, error: 'Invalid resolution' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      const success = await coordinator.resolveConflict(conflictId, body.resolution as any, body.resolvedBy);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₅: Messaging handler
+  private async relayMessageHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const message = await this.parseBody<{ type: string; fromAgentId?: string; toAgentId?: string; payload?: Record<string, unknown> }>(req);
+
+      if (!message || !message.type) {
+        return this.sendJson(res, 400, { success: false, error: 'message with type is required' });
+      }
+
+      const coordinator = this.getOrCreateCoordinator(projectId);
+      await coordinator.relay({ ...message, projectId } as any);
+
+      this.sendJson(res, 200, { success: true });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
   }
 
   start(port: number, host = '0.0.0.0'): Promise<void> {
