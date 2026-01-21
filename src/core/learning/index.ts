@@ -122,51 +122,187 @@ export class LearningSystem {
   }
 
   /**
-   * Record task outcome and update prompt statistics
+   * Record task outcome and update prompt statistics (legacy interface)
    */
-  async recordOutcome(
+  async recordTaskOutcome(
     promptId: string,
     taskId: string,
     success: boolean,
     completionTimeMs?: number,
     context?: Record<string, unknown>
   ): Promise<void> {
-    const db = getDatabase();
-    const reward = success ? 1 : 0;
+    await this.recordOutcome({
+      promptId,
+      taskId,
+      outcome: success ? 'success' : 'failure',
+      reward: success ? 1 : -1,
+      context: { ...context, completionTimeMs },
+    });
+  }
 
-    // Update Thompson Sampling parameters
-    // alpha += reward (successes)
-    // beta += (1 - reward) (failures)
+  /**
+   * Record outcome with granular reward - used by Tester Agent
+   * Supports partial rewards (-1.0 to 1.0) for nuanced learning
+   */
+  async recordOutcome(options: {
+    promptId: string;
+    projectId?: string;
+    taskId?: string;
+    agentId?: string;
+    outcome: 'success' | 'failure' | 'partial';
+    reward: number;  // -1.0 to 1.0
+    context?: Record<string, unknown>;
+  }): Promise<void> {
+    const { promptId, projectId, taskId, agentId, outcome, reward, context } = options;
+    const db = getDatabase();
+
+    // Clamp reward to valid range
+    const clampedReward = Math.max(-1, Math.min(1, reward));
+
+    // Record to rl_outcomes table for detailed tracking
     await db.query(
-      `UPDATE prompts SET
-        alpha = alpha + $1,
-        beta = beta + $2,
-        successful_uses = successful_uses + $3,
-        avg_task_completion_time = COALESCE(
-          (avg_task_completion_time * successful_uses + $4) / (successful_uses + 1),
-          $4
-        )
-       WHERE id = $5`,
-      [reward, 1 - reward, reward, completionTimeMs || 0, promptId]
+      `INSERT INTO rl_outcomes (id, prompt_id, project_id, task_id, agent_id, outcome, reward, context, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+      [
+        uuidv4(),
+        promptId,
+        projectId || null,
+        taskId || null,
+        agentId || null,
+        outcome,
+        clampedReward,
+        JSON.stringify(context || {}),
+      ]
     );
 
-    // Record learning event
+    // Note: The database trigger (trigger_update_prompt_stats) will automatically
+    // update the prompt's alpha/beta values based on the reward
+
+    // Also record to learning_events for backwards compatibility
     await db.query(
       `INSERT INTO learning_events (id, prompt_id, task_id, event_type, reward, context, outcome, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
       [
         uuidv4(),
         promptId,
-        taskId,
-        success ? 'task_success' : 'task_failure',
-        success ? 1 : -1,
+        taskId || null,
+        context?.type as string || (reward >= 0 ? 'positive_reward' : 'negative_reward'),
+        clampedReward,
         JSON.stringify(context || {}),
-        JSON.stringify({ success, completionTimeMs }),
+        JSON.stringify({ outcome, reward: clampedReward }),
       ]
     );
 
     // Check if prompt should be promoted/demoted
     await this.evaluatePromptStatus(promptId);
+  }
+
+  /**
+   * Apply penalty to a developer's prompt when a bug is found
+   * This is called by the Tester Agent
+   */
+  async penalizeDeveloper(
+    promptId: string,
+    bugSeverity: 'critical' | 'high' | 'medium' | 'low' | 'info',
+    bugContext: {
+      bugId: string;
+      bugType: string;
+      file?: string;
+      description?: string;
+    }
+  ): Promise<void> {
+    const severityRewards: Record<string, number> = {
+      critical: -1.0,
+      high: -0.7,
+      medium: -0.4,
+      low: -0.2,
+      info: -0.1,
+    };
+
+    await this.recordOutcome({
+      promptId,
+      outcome: 'failure',
+      reward: severityRewards[bugSeverity] || -0.4,
+      context: {
+        type: 'bug_found',
+        severity: bugSeverity,
+        ...bugContext,
+      },
+    });
+  }
+
+  /**
+   * Reward a developer's prompt when they fix a bug
+   */
+  async rewardBugFix(
+    promptId: string,
+    bugContext: {
+      bugId: string;
+      originalSeverity: string;
+    }
+  ): Promise<void> {
+    await this.recordOutcome({
+      promptId,
+      outcome: 'success',
+      reward: 0.5,  // Fixing bugs is valuable
+      context: {
+        type: 'bug_fixed',
+        ...bugContext,
+      },
+    });
+  }
+
+  /**
+   * Get developer accountability report
+   */
+  async getDeveloperAccountability(agentId: string): Promise<{
+    totalBugsCreated: number;
+    criticalBugs: number;
+    bugsFixed: number;
+    avgReward: number;
+    promptVersion?: number;
+  }> {
+    const db = getDatabase();
+
+    const result = await db.query<{
+      bugs_created: string;
+      critical_bugs: string;
+      bugs_fixed: string;
+      avg_reward: string;
+      prompt_version: number;
+    }>(
+      `SELECT
+        COUNT(DISTINCT b.id) as bugs_created,
+        COUNT(DISTINCT CASE WHEN b.severity = 'critical' THEN b.id END) as critical_bugs,
+        COUNT(DISTINCT CASE WHEN b.fixed THEN b.id END) as bugs_fixed,
+        COALESCE(AVG(r.reward), 0) as avg_reward,
+        p.version as prompt_version
+       FROM agents a
+       LEFT JOIN prompts p ON a.prompt_id = p.id
+       LEFT JOIN bugs b ON b.developer_id = a.id
+       LEFT JOIN rl_outcomes r ON r.agent_id = a.id
+       WHERE a.id = $1
+       GROUP BY a.id, p.version`,
+      [agentId]
+    );
+
+    if (result.rows.length === 0) {
+      return {
+        totalBugsCreated: 0,
+        criticalBugs: 0,
+        bugsFixed: 0,
+        avgReward: 0,
+      };
+    }
+
+    const row = result.rows[0];
+    return {
+      totalBugsCreated: parseInt(row.bugs_created, 10),
+      criticalBugs: parseInt(row.critical_bugs, 10),
+      bugsFixed: parseInt(row.bugs_fixed, 10),
+      avgReward: parseFloat(row.avg_reward),
+      promptVersion: row.prompt_version,
+    };
   }
 
   /**
