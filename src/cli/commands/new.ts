@@ -76,34 +76,30 @@ async function createProject(options: NewProjectOptions): Promise<void> {
   try {
     const db = getDb();
 
-    // Generate project ID
-    const projectId = options.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-    // Check if project exists
+    // Check if project with same name exists
     const existing = await db.query(
-      'SELECT id FROM projects WHERE id = $1',
-      [projectId]
+      'SELECT id FROM projects WHERE name = $1',
+      [options.name]
     );
 
     if (existing.rows.length > 0) {
       spinner.fail('Project already exists');
-      console.log(error(`A project with ID "${projectId}" already exists`));
-      console.log(info('Use "eklavya status ' + projectId + '" to check its status'));
+      console.log(error(`A project with name "${options.name}" already exists`));
+      console.log(info('Use "eklavya status ' + existing.rows[0].id + '" to check its status'));
       process.exit(1);
     }
 
-    // Create the project
+    // Create the project (let PostgreSQL generate UUID)
     const result = await db.query(
-      `INSERT INTO projects (id, name, description, status, budget_limit, project_type, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `INSERT INTO projects (name, description, status, budget_cost_usd, config, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
        RETURNING id, name, status, created_at`,
       [
-        projectId,
         options.name,
         options.description || `Project: ${options.name}`,
         'planning',
         budget,
-        options.type,
+        JSON.stringify({ type: options.type }),
       ]
     );
 
@@ -135,7 +131,7 @@ async function createProject(options: NewProjectOptions): Promise<void> {
     newline();
 
     console.log(success(`Project "${options.name}" created successfully!`));
-    console.log(info(`Run "eklavya status ${projectId}" to monitor progress`));
+    console.log(info(`Run "eklavya status ${project.id}" to monitor progress`));
 
   } catch (err) {
     spinner.fail('Failed to create project');

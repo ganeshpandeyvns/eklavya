@@ -139,8 +139,10 @@ export function statusBadge(status: string): string {
   return colorize(`[${status}]`, color);
 }
 
-export function cost(amount: number): string {
-  return colorize(`$${amount.toFixed(2)}`, amount > 50 ? 'red' : amount > 20 ? 'yellow' : 'green');
+export function cost(amount: number | string | null | undefined): string {
+  const num = typeof amount === 'string' ? parseFloat(amount) : (amount ?? 0);
+  const value = isNaN(num) ? 0 : num;
+  return colorize(`$${value.toFixed(2)}`, value > 50 ? 'red' : value > 20 ? 'yellow' : 'green');
 }
 
 export function duration(ms: number): string {

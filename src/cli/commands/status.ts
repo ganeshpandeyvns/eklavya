@@ -53,7 +53,7 @@ async function showAllProjects(): Promise<void> {
 
     const result = await db.query(`
       SELECT
-        p.id, p.name, p.status, p.budget_limit, p.budget_spent,
+        p.id, p.name, p.status, p.budget_cost_usd, p.cost_used,
         p.created_at, p.updated_at,
         COUNT(DISTINCT a.id) as agent_count,
         COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'in_progress') as active_tasks
@@ -96,7 +96,7 @@ async function showAllProjects(): Promise<void> {
       const rows = projects.map((p: Record<string, unknown>) => [
         p.id as string,
         (p.name as string).substring(0, 30),
-        cost((p.budget_spent as number) || 0) + ' / ' + cost(p.budget_limit as number),
+        cost((p.cost_used as number) || 0) + ' / ' + cost(p.budget_cost_usd as number),
         `${p.agent_count} agents`,
         `${p.active_tasks} tasks`,
       ]);
@@ -139,17 +139,20 @@ async function showProjectStatus(
 
     const project = projectResult.rows[0];
 
-    // Get agents
+    // Get agents with their current task info
     const agentsResult = await db.query(
-      `SELECT id, agent_type, status, current_task, tokens_used, created_at
-       FROM agents WHERE project_id = $1
-       ORDER BY created_at DESC`,
+      `SELECT a.id, a.type, a.status, t.title as current_task,
+              (a.metrics->>'tokens_used')::int as tokens_used, a.created_at
+       FROM agents a
+       LEFT JOIN tasks t ON a.current_task_id = t.id
+       WHERE a.project_id = $1
+       ORDER BY a.created_at DESC`,
       [projectId]
     );
 
     // Get recent tasks
     const tasksResult = await db.query(
-      `SELECT id, title, status, assigned_agent, priority, created_at
+      `SELECT id, title, status, assigned_agent_id, priority, created_at
        FROM tasks WHERE project_id = $1
        ORDER BY created_at DESC LIMIT 10`,
       [projectId]
@@ -157,9 +160,9 @@ async function showProjectStatus(
 
     // Get demos
     const demosResult = await db.query(
-      `SELECT demo_number, status, url, created_at
+      `SELECT version, name, status, preview_url, created_at
        FROM demos WHERE project_id = $1
-       ORDER BY demo_number DESC`,
+       ORDER BY version DESC`,
       [projectId]
     );
 
@@ -172,11 +175,11 @@ async function showProjectStatus(
 
     // Status and budget
     console.log(colorize('Status:', 'bold'), statusBadge(project.status));
-    const budgetPct = project.budget_limit > 0
-      ? ((project.budget_spent || 0) / project.budget_limit)
+    const budgetPct = project.budget_cost_usd > 0
+      ? ((project.cost_used || 0) / project.budget_cost_usd)
       : 0;
-    console.log(colorize('Budget:', 'bold'), progressBar((project.budget_spent || 0), project.budget_limit, 20),
-      cost(project.budget_spent || 0), '/', cost(project.budget_limit));
+    console.log(colorize('Budget:', 'bold'), progressBar((project.cost_used || 0), project.budget_cost_usd, 20),
+      cost(project.cost_used || 0), '/', cost(project.budget_cost_usd));
     newline();
 
     // Project details
@@ -193,9 +196,9 @@ async function showProjectStatus(
     if (demosResult.rows.length > 0) {
       subheader('Demos');
       const demoRows = demosResult.rows.map((d: Record<string, unknown>) => [
-        `Demo ${d.demo_number}`,
+        (d.name as string) || `Demo v${d.version}`,
         statusBadge(d.status as string),
-        (d.url as string) || '-',
+        (d.preview_url as string) || '-',
         new Date(d.created_at as string).toLocaleDateString(),
       ]);
       table(demoRows, ['Demo', 'Status', 'URL', 'Date']);
@@ -207,7 +210,7 @@ async function showProjectStatus(
       if (agentsResult.rows.length > 0) {
         const agentRows = agentsResult.rows.map((a: Record<string, unknown>) => [
           (a.id as string).substring(0, 8),
-          a.agent_type as string,
+          a.type as string,
           statusBadge(a.status as string),
           (a.current_task as string)?.substring(0, 30) || '-',
         ]);
@@ -225,7 +228,7 @@ async function showProjectStatus(
           (t.id as string).substring(0, 8),
           (t.title as string).substring(0, 40),
           statusBadge(t.status as string),
-          t.assigned_agent ? (t.assigned_agent as string).substring(0, 8) : '-',
+          t.assigned_agent_id ? (t.assigned_agent_id as string).substring(0, 8) : '-',
         ]);
         table(taskRows, ['ID', 'Title', 'Status', 'Agent']);
       } else {

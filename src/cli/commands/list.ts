@@ -36,7 +36,7 @@ export async function listCommand(args: string[]): Promise<void> {
 
     let query = `
       SELECT
-        p.id, p.name, p.status, p.budget_limit, p.budget_spent,
+        p.id, p.name, p.status, p.budget_cost_usd, p.cost_used,
         p.created_at, p.updated_at,
         COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'working') as active_agents,
         COUNT(DISTINCT d.id) FILTER (WHERE d.status = 'ready') as ready_demos
@@ -89,7 +89,7 @@ export async function listCommand(args: string[]): Promise<void> {
         p.id as string,
         ((p.name as string).substring(0, 25) + indicators),
         statusBadge(p.status as string),
-        cost((p.budget_spent as number) || 0),
+        cost((p.cost_used as number) || 0),
         `${p.active_agents} agents`,
         timeAgo(p.updated_at as string),
       ];

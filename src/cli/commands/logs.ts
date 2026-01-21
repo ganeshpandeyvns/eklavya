@@ -45,11 +45,10 @@ export async function logsCommand(args: string[]): Promise<void> {
 }
 
 const LOG_COLORS: Record<string, keyof typeof import('../utils/output.js').colors> = {
-  error: 'red',
-  warn: 'yellow',
+  critical: 'red',
+  important: 'yellow',
   info: 'blue',
-  debug: 'gray',
-  success: 'green',
+  silent: 'gray',
 };
 
 const AGENT_ICONS: Record<string, string> = {
@@ -95,12 +94,13 @@ async function streamLogs(
 
     const project = projectResult.rows[0];
 
-    // Build query
+    // Build query using activity_stream table
     let query = `
-      SELECT l.*, a.agent_type
-      FROM logs l
-      LEFT JOIN agents a ON l.agent_id = a.id
-      WHERE l.project_id = $1
+      SELECT a.id, a.project_id, a.agent_id, a.agent_type,
+             a.event_type, a.action as message, a.details,
+             a.notification_level as level, a.created_at
+      FROM activity_stream a
+      WHERE a.project_id = $1
     `;
 
     const params: (string | number)[] = [projectId];
@@ -114,12 +114,12 @@ async function streamLogs(
 
     if (options.level) {
       const levels = getLevelsForFilter(options.level);
-      query += ` AND l.level = ANY($${paramIndex}::text[])`;
+      query += ` AND a.notification_level = ANY($${paramIndex}::notification_level[])`;
       params.push(`{${levels.join(',')}}`);
       paramIndex++;
     }
 
-    query += ` ORDER BY l.created_at DESC LIMIT $${paramIndex}`;
+    query += ` ORDER BY a.created_at DESC LIMIT $${paramIndex}`;
     params.push(options.limit);
 
     const result = await db.query(query, params);
@@ -157,10 +157,11 @@ async function streamLogs(
       const pollInterval = setInterval(async () => {
         try {
           let followQuery = `
-            SELECT l.*, a.agent_type
-            FROM logs l
-            LEFT JOIN agents a ON l.agent_id = a.id
-            WHERE l.project_id = $1 AND l.id > $2
+            SELECT a.id, a.project_id, a.agent_id, a.agent_type,
+                   a.event_type, a.action as message, a.details,
+                   a.notification_level as level, a.created_at
+            FROM activity_stream a
+            WHERE a.project_id = $1 AND a.id > $2
           `;
           const followParams: (string | number)[] = [projectId, lastId];
 
@@ -169,7 +170,7 @@ async function streamLogs(
             followParams.push(options.agentType);
           }
 
-          followQuery += ` ORDER BY l.created_at ASC`;
+          followQuery += ` ORDER BY a.created_at ASC`;
 
           const newLogs = await db.query(followQuery, followParams);
 
@@ -236,7 +237,8 @@ function printLogEntry(log: Record<string, unknown>): void {
 }
 
 function getLevelsForFilter(level: string): string[] {
-  const allLevels = ['error', 'warn', 'info', 'debug'];
+  // notification_level enum: critical, important, info, silent
+  const allLevels = ['critical', 'important', 'info', 'silent'];
   const index = allLevels.indexOf(level.toLowerCase());
   if (index === -1) return allLevels;
   return allLevels.slice(0, index + 1);
