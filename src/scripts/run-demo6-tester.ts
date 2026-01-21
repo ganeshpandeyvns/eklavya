@@ -11,6 +11,9 @@
  * 6. API endpoints for all features
  */
 
+// Disable authentication for API tests
+process.env.AUTH_DISABLED = 'true';
+
 import { getDatabase } from '../lib/database.js';
 
 // Initialize database with environment config
