@@ -62,6 +62,8 @@ import { getDemoService, DemoType, DemoStatus } from '../core/demos/index.js';
 import { getApprovalService, ApprovalDecision } from '../core/demos/approval.js';
 import { getVerificationService } from '../core/demos/verification.js';
 import { getFeedbackService, FeedbackSentiment, FeedbackCategory } from '../core/demos/feedback.js';
+import { getSelfBuildManager, SelfBuildConfig, SelfBuildStatus } from '../core/self-build/index.js';
+import { getAllSampleProjects, getSampleProject, createSimulatedConfig } from '../core/self-build/sample-projects.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -255,6 +257,22 @@ export class ApiServer {
     // Demo₇: Scaffolding
     this.route('GET', '/api/projects/:projectId/scaffolding', this.getProjectScaffoldingHandler);
     this.route('GET', '/api/demos/:demoId/scaffolding', this.getDemoScaffoldingHandler);
+
+    // Demo₈: Self-Build Test
+    this.route('POST', '/api/projects/:projectId/self-build', this.startSelfBuildHandler);
+    this.route('GET', '/api/self-build/:runId', this.getSelfBuildRunHandler);
+    this.route('GET', '/api/self-build/:runId/plan', this.getSelfBuildPlanHandler);
+    this.route('POST', '/api/self-build/:runId/plan', this.createSelfBuildPlanHandler);
+    this.route('POST', '/api/self-build/:runId/execute', this.executeSelfBuildHandler);
+    this.route('GET', '/api/self-build/:runId/progress', this.getSelfBuildProgressHandler);
+    this.route('GET', '/api/self-build/:runId/phases', this.getSelfBuildPhasesHandler);
+    this.route('DELETE', '/api/self-build/:runId', this.cancelSelfBuildHandler);
+    this.route('GET', '/api/projects/:projectId/self-builds', this.listSelfBuildRunsHandler);
+    this.route('POST', '/api/self-build/run-full', this.runFullSelfBuildHandler);
+
+    // Demo₈: Sample Projects
+    this.route('GET', '/api/sample-projects', this.listSampleProjectsHandler);
+    this.route('GET', '/api/sample-projects/:name', this.getSampleProjectHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -1874,6 +1892,208 @@ export class ApiServer {
       if (error instanceof Error && error.message.includes('not found')) {
         return this.sendJson(res, 404, { success: false, error: error.message });
       }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₈: Self-Build handlers
+  private async startSelfBuildHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<SelfBuildConfig>(req);
+
+      if (!body.projectName) {
+        return this.sendJson(res, 400, { success: false, error: 'projectName is required' });
+      }
+
+      const manager = getSelfBuildManager();
+      const run = await manager.startBuild(projectId, body);
+
+      this.sendJson(res, 201, { success: true, run });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getSelfBuildRunHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const run = await manager.getRun(runId);
+
+      this.sendJson(res, 200, { success: true, run });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return this.sendJson(res, 404, { success: false, error: error.message });
+      }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getSelfBuildPlanHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const run = await manager.getRun(runId);
+
+      if (!run.executionPlan) {
+        return this.sendJson(res, 404, { success: false, error: 'No execution plan found' });
+      }
+
+      this.sendJson(res, 200, { success: true, plan: run.executionPlan });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async createSelfBuildPlanHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const plan = await manager.createPlan(runId);
+
+      this.sendJson(res, 201, { success: true, plan });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async executeSelfBuildHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const result = await manager.execute(runId);
+
+      this.sendJson(res, 200, { success: result.success, result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getSelfBuildProgressHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const progress = await manager.getProgress(runId);
+
+      this.sendJson(res, 200, { success: true, progress });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getSelfBuildPhasesHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const phases = await manager.getPhases(runId);
+
+      this.sendJson(res, 200, { success: true, phases, count: phases.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async cancelSelfBuildHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { runId } = params;
+
+      const manager = getSelfBuildManager();
+      const success = await manager.cancel(runId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async listSelfBuildRunsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const status = url.searchParams.get('status') as SelfBuildStatus | undefined;
+      const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+
+      const manager = getSelfBuildManager();
+      const runs = await manager.listRuns(projectId, { status, limit });
+
+      this.sendJson(res, 200, { success: true, runs, count: runs.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async runFullSelfBuildHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseBody<{ projectId: string; config: SelfBuildConfig }>(req);
+
+      if (!body.projectId) {
+        return this.sendJson(res, 400, { success: false, error: 'projectId is required' });
+      }
+      if (!body.config || !body.config.projectName) {
+        return this.sendJson(res, 400, { success: false, error: 'config with projectName is required' });
+      }
+
+      const manager = getSelfBuildManager();
+      const result = await manager.runSelfBuild(body.projectId, body.config);
+
+      this.sendJson(res, 200, { success: result.success, result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₈: Sample Projects handlers
+  private async listSampleProjectsHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const projects = getAllSampleProjects();
+      const projectList = Object.entries(projects).map(([name, config]) => ({
+        name,
+        description: config.projectDescription,
+        features: config.features.length,
+        techStack: config.techStack,
+        maxExecutionTime: config.maxExecutionTime,
+        maxBudget: config.maxBudget,
+      }));
+
+      this.sendJson(res, 200, { success: true, projects: projectList, count: projectList.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getSampleProjectHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { name } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const simulated = url.searchParams.get('simulated') === 'true';
+      const duration = parseInt(url.searchParams.get('duration') || '5000', 10);
+      const successRate = parseFloat(url.searchParams.get('successRate') || '1.0');
+
+      let project: SelfBuildConfig | undefined;
+
+      if (simulated) {
+        try {
+          project = createSimulatedConfig(name, duration, successRate);
+        } catch {
+          return this.sendJson(res, 404, { success: false, error: `Sample project not found: ${name}` });
+        }
+      } else {
+        project = getSampleProject(name);
+      }
+
+      if (!project) {
+        return this.sendJson(res, 404, { success: false, error: `Sample project not found: ${name}` });
+      }
+
+      this.sendJson(res, 200, { success: true, project });
+    } catch (error) {
       this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
     }
   }
