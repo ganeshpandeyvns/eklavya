@@ -140,35 +140,81 @@ Each agent is a Claude Code process with:
 - **Web Framework**: Next.js 14
 - **Testing**: Vitest (unit), Playwright (E2E)
 
-## Key Commands (Once Built)
+## Monorepo Structure
 
+This is a monorepo with two npm packages:
+- `package.json` (root) - Minimal, mainly for repo metadata
+- `src/package.json` (@eklavya/core) - Backend with PostgreSQL, Redis, agent management
+- `web/package.json` - Next.js 14 dashboard
+
+Always run `npm install` in the specific directory you're working in.
+
+## Development Commands
+
+### Backend Core (`src/`)
 ```bash
-npm install              # Install dependencies
-npm run dev              # Start development server
-npm run build            # Build for production
-npm run db:migrate       # Run database migrations
-npm run db:seed          # Seed initial prompt versions
-npm run test             # Run tests
-npm run test:e2e         # Run E2E tests
+cd src && npm install        # Install backend dependencies
+cd src && npm run build      # Compile TypeScript
+cd src && npm run dev        # Watch mode development (tsx)
+cd src && npm run start      # Run compiled dist/index.js
+cd src && npm run test       # Run Vitest tests
+cd src && npm run test:coverage  # Tests with coverage
+cd src && npm run lint       # ESLint check
+cd src && npm run db:migrate # Run database migrations
+cd src && npm run db:seed    # Seed prompt data
 ```
 
-## Project Structure (Target)
+### Web Dashboard (`web/`)
+```bash
+cd web && npm install        # Install frontend dependencies
+cd web && npm run dev        # Start Next.js dev server (port 3000)
+cd web && npm run build      # Production build
+cd web && npm run start      # Start production server
+cd web && npm run lint       # ESLint check
+```
+
+### Demo Scripts (from repo root)
+```bash
+./scripts/run-dev-server.sh   # Start web frontend
+./scripts/run-demo-tester.sh  # Verify demo works
+./scripts/run-overnight.sh    # Full overnight autonomous build
+```
+
+## Project Structure
 
 ```
 eklavya/
-├── src/
+├── src/                           # Backend core (@eklavya/core)
 │   ├── core/
-│   │   ├── agent-manager/     # Agent lifecycle management
-│   │   ├── message-bus/       # Inter-agent communication
-│   │   ├── learning/          # RL and prompt evolution
-│   │   └── checkpoint/        # State persistence
-│   ├── services/              # Business logic
-│   ├── api/                   # REST and internal APIs
-│   └── lib/                   # Shared utilities
-├── web/                       # Next.js dashboard
-├── prompts/                   # Agent prompt templates
-├── projects/                  # User projects (isolated)
-└── tests/
+│   │   ├── agent-manager/         # Agent lifecycle (spawns Claude Code processes)
+│   │   ├── message-bus/           # Redis pub/sub + PostgreSQL persistence
+│   │   ├── learning/              # Thompson Sampling for prompt selection
+│   │   └── checkpoint/            # State persistence
+│   ├── types/index.ts             # Zod schemas for all entities
+│   ├── api/index.ts               # API entry point
+│   ├── lib/                       # Database, utilities
+│   └── index.ts                   # Main entry point
+├── web/                           # Next.js 14 dashboard
+│   └── src/
+│       ├── app/                   # App router pages
+│       │   ├── page.tsx           # Dashboard home
+│       │   ├── new/page.tsx       # New project form
+│       │   ├── import/page.tsx    # Import existing project
+│       │   └── projects/page.tsx  # Projects list
+│       ├── components/
+│       │   ├── dashboard/         # StatsCards, ProjectCard, ActivityFeed, AgentGrid
+│       │   ├── layout/            # Header, Sidebar
+│       │   └── chat/              # ChatInterface
+│       ├── data/mock.ts           # Mock data for demos
+│       ├── lib/                   # Utils, API client
+│       └── types/index.ts         # Frontend type definitions
+│   └── tests/                     # Playwright E2E tests
+├── scripts/                       # Autonomous operation scripts
+│   ├── run-dev-server.sh          # Start web frontend
+│   ├── run-demo-tester.sh         # Verify demo is ready
+│   └── run-overnight.sh           # Full overnight build
+├── prompts/                       # Agent prompt templates
+└── projects/                      # User projects (isolated)
 ```
 
 ## Communication Protocol
@@ -179,6 +225,20 @@ Agents communicate via Redis pub/sub with PostgreSQL persistence:
 - `eklavya:{projectId}:broadcast` - All project agents
 
 Key message types: `TASK_ASSIGN`, `TASK_COMPLETE`, `TASK_FAILED`, `TASK_BLOCKED`, `MENTOR_SUGGESTION`
+
+## Core Types (src/types/index.ts)
+
+All entities validated with Zod schemas:
+
+| Type | Values |
+|------|--------|
+| `AgentType` | orchestrator, architect, developer, tester, qa, pm, uat, sre, monitor, mentor |
+| `AgentStatus` | initializing, idle, working, blocked, completed, failed, terminated |
+| `TaskStatus` | pending, assigned, in_progress, blocked, completed, failed, cancelled |
+| `MessageType` | task_assign, task_complete, task_failed, task_blocked, status_update, checkpoint, mentor_suggestion, broadcast |
+| `PromptStatus` | experimental, candidate, production, deprecated |
+
+Key schemas: `ProjectSchema`, `AgentSchema`, `TaskSchema`, `MessageSchema`, `PromptSchema`, `CheckpointSchema`, `LearningEventSchema`
 
 ## Learning System
 
