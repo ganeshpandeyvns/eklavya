@@ -17,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/ganeshpandeyvns/eklavya/issues"
   },
-  "homepage": "https://github.com/ganeshpandeyvns/eklavya#readme"
+  "homepage": "https://github.com/ganeshpandeyvns/eklavya#readme",
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
 }
