@@ -3,6 +3,19 @@ import { URL } from 'url';
 import { getDatabase } from '../lib/database.js';
 import type { Agent, Task, Message, Project } from '../types/index.js';
 import {
+  authenticate,
+  applySecurityHeaders,
+  cors,
+  rateLimit,
+  checkBodySize,
+  parseBodyWithLimit,
+  getRateLimiterForMethod,
+  isHeavyEndpoint,
+  isAuthEndpoint,
+  RATE_LIMIT_CONFIGS,
+  type AuthenticatedRequest
+} from '../middleware/index.js';
+import {
   getDashboardStats,
   getProjectActivity,
   getAgentStats,
@@ -283,19 +296,46 @@ export class ApiServer {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // Apply security headers to all responses
+    applySecurityHeaders(res);
 
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
+    // Handle CORS with configurable whitelist
+    const corsResult = await cors(req, res);
+    if (!corsResult) {
+      // CORS handled the response (preflight or denied)
       return;
     }
 
     try {
       const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+      // Check request body size for POST/PUT/PATCH requests
+      if (['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
+        if (!checkBodySize(req, res)) {
+          return;
+        }
+      }
+
+      // Apply rate limiting based on endpoint type
+      let rateLimitConfig = getRateLimiterForMethod(req.method || 'GET');
+      if (isHeavyEndpoint(url.pathname)) {
+        rateLimitConfig = RATE_LIMIT_CONFIGS.heavy;
+      } else if (isAuthEndpoint(url.pathname)) {
+        rateLimitConfig = RATE_LIMIT_CONFIGS.auth;
+      }
+
+      const rateLimitPassed = await rateLimit(req, res, rateLimitConfig);
+      if (!rateLimitPassed) {
+        return;
+      }
+
+      // Authenticate request (skips health check endpoint)
+      const authReq = req as AuthenticatedRequest;
+      const authPassed = await authenticate(authReq, res);
+      if (!authPassed) {
+        return;
+      }
+
       const methodRoutes = this.routes.get(req.method || 'GET');
 
       if (!methodRoutes) {
@@ -307,7 +347,7 @@ export class ApiServer {
       for (const [pattern, handler] of methodRoutes) {
         const params = this.matchRoute(pattern, url.pathname);
         if (params !== null) {
-          await handler(req, res, params);
+          await handler(authReq, res, params);
           return;
         }
       }
@@ -343,17 +383,45 @@ export class ApiServer {
     res.end(JSON.stringify(data));
   }
 
-  private async parseBody<T>(req: IncomingMessage): Promise<T> {
+  private async parseBody<T>(req: IncomingMessage, res?: ServerResponse): Promise<T> {
+    const maxSize = parseInt(process.env.MAX_BODY_SIZE || '1048576', 10);
+
     return new Promise((resolve, reject) => {
       let body = '';
-      req.on('data', chunk => body += chunk);
+      let totalSize = 0;
+      let limitExceeded = false;
+
+      req.on('data', (chunk: Buffer) => {
+        if (limitExceeded) return;
+
+        totalSize += chunk.length;
+        if (totalSize > maxSize) {
+          limitExceeded = true;
+          if (res) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: 'Request body too large',
+              code: 'PAYLOAD_TOO_LARGE',
+              maxSize
+            }));
+          }
+          reject(new Error('Payload too large'));
+          return;
+        }
+
+        body += chunk.toString();
+      });
+
       req.on('end', () => {
+        if (limitExceeded) return;
+
         try {
           resolve(JSON.parse(body || '{}') as T);
         } catch {
           reject(new Error('Invalid JSON'));
         }
       });
+
       req.on('error', reject);
     });
   }

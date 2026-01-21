@@ -16,7 +16,7 @@ const config: EklavyaConfig = {
     port: parseInt(process.env.DB_PORT || '5432'),
     database: process.env.DB_NAME || 'eklavya',
     user: process.env.DB_USER || 'eklavya',
-    password: process.env.DB_PASSWORD || 'eklavya_dev_pwd',
+    password: process.env.DB_PASSWORD || '',
   },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
