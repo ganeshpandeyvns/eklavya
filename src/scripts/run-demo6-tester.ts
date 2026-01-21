@@ -35,6 +35,7 @@ import {
 import {
   getProgressService,
 } from '../core/progress/index.js';
+import { createApiServer, type ApiServer } from '../api/index.js';
 
 interface TestResult {
   name: string;
@@ -65,6 +66,7 @@ class Demo6Tester {
   private testProjectId: string = '';
   private testAgentId: string = '';
   private testTaskId: string = '';
+  private apiServer: ApiServer | null = null;
 
   async runAllTests(): Promise<void> {
     console.log('\n╔════════════════════════════════════════╗');
@@ -103,16 +105,59 @@ class Demo6Tester {
     await this.testQuietHoursDetection();
 
     console.log('\n🌐 Testing API Endpoints...\n');
+    // Start API server for endpoint tests
+    await this.startApiServer();
     await this.testNotificationAPI();
     await this.testActivityAPI();
     await this.testProgressAPI();
     await this.testSettingsAPI();
+    await this.stopApiServer();
 
     // Cleanup
     await this.cleanup();
 
     // Print results
     this.printResults();
+  }
+
+  private async startApiServer(): Promise<void> {
+    // Check if server is already running by attempting a connection
+    try {
+      const response = await fetch(`${API_BASE}/api/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(1000)
+      });
+      if (response.ok) {
+        console.log('  ✓ API server already running on port 4000\n');
+        return;
+      }
+    } catch {
+      // Server not running, we need to start it
+    }
+
+    try {
+      this.apiServer = createApiServer({ port: 4000 });
+      await this.apiServer.start(4000);
+      // Give server time to fully start
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log('  ✓ API server started on port 4000\n');
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      if (errMsg.includes('EADDRINUSE')) {
+        console.log('  ✓ API server already running on port 4000\n');
+        this.apiServer = null; // Don't try to stop it later
+      } else {
+        console.log(`  ⚠ Could not start API server: ${errMsg}`);
+        console.log('  → API tests will be skipped if server unavailable\n');
+      }
+    }
+  }
+
+  private async stopApiServer(): Promise<void> {
+    if (this.apiServer) {
+      await this.apiServer.stop();
+      this.apiServer = null;
+    }
   }
 
   private async setupTestData(): Promise<void> {
