@@ -10,6 +10,50 @@ import {
   getPromptStats,
   getProjectTimeline,
 } from './dashboard.js';
+import {
+  listAllTasks,
+  getTaskById,
+  assignTaskToAgent,
+  completeTask,
+  failTask,
+  retryTask,
+  getTaskQueueStats,
+  getNextTask,
+  createTaskEnhanced,
+  cancelTask,
+} from './tasks.js';
+import {
+  getOrchestratorStatus,
+  startOrchestrator,
+  stopOrchestrator,
+  submitPlan,
+  forceAgentCheckpoint,
+  resumeAgentFromCheckpoint,
+  getAgentMessages,
+  sendMessageToAgent,
+  getCheckpointStats,
+  getAgentCheckpoints,
+  getExecutionLogs,
+} from './orchestrator.js';
+import {
+  spawnAgent as spawnAgentLifecycle,
+  terminateAgent as terminateAgentLifecycle,
+  killAgent,
+  restartAgent,
+  getAgentProcess,
+  getAgentHealth,
+  getAgentResources,
+  recordAgentResources,
+  getManagerStatus,
+  spawnAllAgents,
+  terminateAllAgents,
+  getAggregateResources,
+  garbageCollect,
+  startManager,
+  stopManager,
+  getAgentHealthHistory,
+  getAgentResourceHistory,
+} from './lifecycle.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -39,9 +83,9 @@ export class ApiServer {
     this.route('POST', '/api/projects/:projectId/agents', this.spawnAgent);
     this.route('DELETE', '/api/agents/:id', this.terminateAgent);
 
-    // Tasks
+    // Tasks - using new enhanced handlers
     this.route('GET', '/api/projects/:projectId/tasks', this.listTasks);
-    this.route('GET', '/api/tasks/:id', this.getTask);
+    // Note: /api/tasks/:id replaced by /api/tasks/:taskId in Demo₃ routes below
     this.route('POST', '/api/projects/:projectId/tasks', this.createTask);
     this.route('PATCH', '/api/tasks/:id', this.updateTask);
 
@@ -59,6 +103,58 @@ export class ApiServer {
     this.route('GET', '/api/projects/:projectId/agents/live', this.getProjectAgentsLive);
     this.route('GET', '/api/prompts/:agentType/stats', this.getPromptStats);
     this.route('GET', '/api/projects/:projectId/timeline', this.getProjectTimeline);
+
+    // Demo₃: Task execution endpoints
+    this.route('GET', '/api/tasks', this.listAllTasksHandler);
+    this.route('GET', '/api/tasks/queue/stats', this.getTaskQueueStatsHandler);
+    this.route('GET', '/api/tasks/queue/next', this.getNextTaskHandler);
+    this.route('POST', '/api/tasks', this.createTaskEnhancedHandler);
+    this.route('GET', '/api/tasks/:taskId', this.getTaskByIdHandler);
+    this.route('PUT', '/api/tasks/:taskId/assign', this.assignTaskHandler);
+    this.route('PUT', '/api/tasks/:taskId/complete', this.completeTaskHandler);
+    this.route('PUT', '/api/tasks/:taskId/fail', this.failTaskHandler);
+    this.route('POST', '/api/tasks/:taskId/retry', this.retryTaskHandler);
+    this.route('DELETE', '/api/tasks/:taskId', this.cancelTaskHandler);
+
+    // Demo₃: Orchestrator endpoints
+    this.route('GET', '/api/orchestrator/status', this.getOrchestratorStatusHandler);
+    this.route('POST', '/api/orchestrator/start', this.startOrchestratorHandler);
+    this.route('POST', '/api/orchestrator/stop', this.stopOrchestratorHandler);
+    this.route('POST', '/api/orchestrator/plan', this.submitPlanHandler);
+
+    // Demo₃: Agent checkpoint/message endpoints
+    this.route('POST', '/api/agents/:agentId/checkpoint', this.forceAgentCheckpointHandler);
+    this.route('POST', '/api/agents/:agentId/resume', this.resumeAgentHandler);
+    this.route('GET', '/api/agents/:agentId/messages', this.getAgentMessagesHandler);
+    this.route('POST', '/api/agents/:agentId/message', this.sendMessageToAgentHandler);
+
+    // Demo₃: Checkpoint endpoints
+    this.route('GET', '/api/checkpoints', this.getCheckpointStatsHandler);
+    this.route('GET', '/api/checkpoints/:agentId', this.getAgentCheckpointsHandler);
+
+    // Demo₃: Execution logs
+    this.route('GET', '/api/execution-logs', this.getExecutionLogsHandler);
+
+    // Demo₄: Agent Lifecycle Management
+    this.route('POST', '/api/agents/:agentId/spawn', this.spawnAgentLifecycleHandler);
+    this.route('POST', '/api/agents/:agentId/terminate', this.terminateAgentLifecycleHandler);
+    this.route('POST', '/api/agents/:agentId/kill', this.killAgentHandler);
+    this.route('POST', '/api/agents/:agentId/restart', this.restartAgentHandler);
+    this.route('GET', '/api/agents/:agentId/process', this.getAgentProcessHandler);
+    this.route('GET', '/api/agents/:agentId/health', this.getAgentHealthHandler);
+    this.route('GET', '/api/agents/:agentId/resources', this.getAgentResourcesHandler);
+    this.route('POST', '/api/agents/:agentId/resources', this.recordAgentResourcesHandler);
+    this.route('GET', '/api/agents/:agentId/health-history', this.getAgentHealthHistoryHandler);
+    this.route('GET', '/api/agents/:agentId/resource-history', this.getAgentResourceHistoryHandler);
+
+    // Demo₄: Agent Manager endpoints
+    this.route('GET', '/api/agent-manager/status', this.getManagerStatusHandler);
+    this.route('POST', '/api/agent-manager/spawn-all', this.spawnAllAgentsHandler);
+    this.route('POST', '/api/agent-manager/terminate-all', this.terminateAllAgentsHandler);
+    this.route('GET', '/api/agent-manager/resources', this.getAggregateResourcesHandler);
+    this.route('POST', '/api/agent-manager/gc', this.garbageCollectHandler);
+    this.route('POST', '/api/agent-manager/start', this.startManagerHandler);
+    this.route('POST', '/api/agent-manager/stop', this.stopManagerHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -311,6 +407,165 @@ export class ApiServer {
 
   private async getProjectTimeline(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
     await getProjectTimeline(req, res, params.projectId);
+  }
+
+  // Demo₃: Task execution handlers
+  private async listAllTasksHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await listAllTasks(req, res);
+  }
+
+  private async getTaskQueueStatsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getTaskQueueStats(req, res);
+  }
+
+  private async getNextTaskHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getNextTask(req, res);
+  }
+
+  private async createTaskEnhancedHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await createTaskEnhanced(req, res);
+  }
+
+  private async getTaskByIdHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getTaskById(_req, res, params.taskId);
+  }
+
+  private async assignTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await assignTaskToAgent(req, res, params.taskId);
+  }
+
+  private async completeTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await completeTask(req, res, params.taskId);
+  }
+
+  private async failTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await failTask(req, res, params.taskId);
+  }
+
+  private async retryTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await retryTask(req, res, params.taskId);
+  }
+
+  private async cancelTaskHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await cancelTask(req, res, params.taskId);
+  }
+
+  // Demo₃: Orchestrator handlers
+  private async getOrchestratorStatusHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getOrchestratorStatus(req, res);
+  }
+
+  private async startOrchestratorHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await startOrchestrator(req, res);
+  }
+
+  private async stopOrchestratorHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await stopOrchestrator(req, res);
+  }
+
+  private async submitPlanHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await submitPlan(req, res);
+  }
+
+  // Demo₃: Agent checkpoint/message handlers
+  private async forceAgentCheckpointHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await forceAgentCheckpoint(req, res, params.agentId);
+  }
+
+  private async resumeAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await resumeAgentFromCheckpoint(req, res, params.agentId);
+  }
+
+  private async getAgentMessagesHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentMessages(req, res, params.agentId);
+  }
+
+  private async sendMessageToAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await sendMessageToAgent(req, res, params.agentId);
+  }
+
+  // Demo₃: Checkpoint handlers
+  private async getCheckpointStatsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getCheckpointStats(req, res);
+  }
+
+  private async getAgentCheckpointsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentCheckpoints(req, res, params.agentId);
+  }
+
+  // Demo₃: Execution logs handler
+  private async getExecutionLogsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getExecutionLogs(req, res);
+  }
+
+  // Demo₄: Agent Lifecycle handlers
+  private async spawnAgentLifecycleHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await spawnAgentLifecycle(req, res, params.agentId);
+  }
+
+  private async terminateAgentLifecycleHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await terminateAgentLifecycle(req, res, params.agentId);
+  }
+
+  private async killAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await killAgent(req, res, params.agentId);
+  }
+
+  private async restartAgentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await restartAgent(req, res, params.agentId);
+  }
+
+  private async getAgentProcessHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentProcess(req, res, params.agentId);
+  }
+
+  private async getAgentHealthHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentHealth(req, res, params.agentId);
+  }
+
+  private async getAgentResourcesHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentResources(req, res, params.agentId);
+  }
+
+  private async recordAgentResourcesHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await recordAgentResources(req, res, params.agentId);
+  }
+
+  private async getAgentHealthHistoryHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentHealthHistory(req, res, params.agentId);
+  }
+
+  private async getAgentResourceHistoryHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentResourceHistory(req, res, params.agentId);
+  }
+
+  // Demo₄: Agent Manager handlers
+  private async getManagerStatusHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getManagerStatus(req, res);
+  }
+
+  private async spawnAllAgentsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await spawnAllAgents(req, res);
+  }
+
+  private async terminateAllAgentsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await terminateAllAgents(req, res);
+  }
+
+  private async getAggregateResourcesHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getAggregateResources(req, res);
+  }
+
+  private async garbageCollectHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await garbageCollect(req, res);
+  }
+
+  private async startManagerHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await startManager(req, res);
+  }
+
+  private async stopManagerHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await stopManager(req, res);
   }
 
   start(port: number, host = '0.0.0.0'): Promise<void> {
