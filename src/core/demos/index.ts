@@ -89,8 +89,16 @@ export class DemoService extends EventEmitter {
 
   /**
    * Create a new demo for a project.
+   * @throws Error if projectId or name is missing, or if database operation fails
    */
   async createDemo(projectId: string, options: CreateDemoOptions): Promise<Demo> {
+    if (!projectId) {
+      throw new Error('projectId is required');
+    }
+    if (!options.name) {
+      throw new Error('Demo name is required');
+    }
+
     const db = getDatabase();
 
     const config: DemoConfig = {
@@ -101,22 +109,27 @@ export class DemoService extends EventEmitter {
       estimatedCost: options.config?.estimatedCost || 0,
     };
 
-    const result = await db.query<{ create_demo: string }>(
-      `SELECT create_demo($1, $2::demo_type, $3, $4, $5)`,
-      [
-        projectId,
-        options.type || 'milestone',
-        options.name,
-        options.description || null,
-        JSON.stringify(config),
-      ]
-    );
+    try {
+      const result = await db.query<{ create_demo: string }>(
+        `SELECT create_demo($1, $2::demo_type, $3, $4, $5)`,
+        [
+          projectId,
+          options.type || 'milestone',
+          options.name,
+          options.description || null,
+          JSON.stringify(config),
+        ]
+      );
 
-    const demoId = result.rows[0].create_demo;
-    const demo = await this.getDemo(demoId);
+      const demoId = result.rows[0].create_demo;
+      const demo = await this.getDemo(demoId);
 
-    this.emit('demo:created', demo);
-    return demo;
+      this.emit('demo:created', demo);
+      return demo;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to create demo: ${message}`);
+    }
   }
 
   /**

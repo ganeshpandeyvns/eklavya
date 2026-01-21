@@ -54,20 +54,33 @@ export class ApprovalService extends EventEmitter {
 
   /**
    * Request approval for a demo.
+   * @throws Error if demoId is missing or demo is not in ready status
    */
   async requestApproval(demoId: string, requestedBy: string = 'system'): Promise<ApprovalRequest> {
+    if (!demoId) {
+      throw new Error('demoId is required');
+    }
+
     const db = getDatabase();
 
-    const result = await db.query<{ request_demo_approval: string }>(
-      `SELECT request_demo_approval($1, $2)`,
-      [demoId, requestedBy]
-    );
+    try {
+      const result = await db.query<{ request_demo_approval: string }>(
+        `SELECT request_demo_approval($1, $2)`,
+        [demoId, requestedBy]
+      );
 
-    const requestId = result.rows[0].request_demo_approval;
-    const request = await this.getApprovalRequest(requestId);
+      const requestId = result.rows[0].request_demo_approval;
+      const request = await this.getApprovalRequest(requestId);
 
-    this.emit('approval:requested', request);
-    return request;
+      this.emit('approval:requested', request);
+      return request;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (message.includes('must be in ready status')) {
+        throw new Error('Demo must be in ready status to request approval');
+      }
+      throw new Error(`Failed to request approval: ${message}`);
+    }
   }
 
   /**

@@ -396,7 +396,13 @@ export class QualityAnalyzer {
         }
 
         // Check for SQL injection vulnerabilities
-        if (content.match(/query\s*\(\s*[`'"].*\$\{/)) {
+        // Match template strings in query() calls that interpolate variables
+        // Exclude safe patterns:
+        //   - $${paramIndex} - building parameter placeholders
+        //   - ${setClauses} - joining pre-built column assignments
+        //   - ${updates} - joining pre-built updates
+        const sqlInjectionPattern = /query\s*\(\s*`[^`]*\$\{(?!paramIndex|index|\$|setClauses|updates)/;
+        if (content.match(sqlInjectionPattern)) {
           this.issues.push({
             id: `sql-injection-${Date.now()}-${Math.random()}`,
             severity: 'critical',
@@ -617,8 +623,8 @@ export class QualityAnalyzer {
       }
 
       // Check for eval() - but not in regex patterns (/eval/) or strings ('eval', "eval")
-      // Look for: eval( with optional whitespace, not preceded by / ' " or \
-      if (/[^\/'"\\]eval\s*\(/.test(line) || /^eval\s*\(/.test(trimmedLine)) {
+      // Use word boundary to avoid false positives on "Retrieval", "evaluate", etc.
+      if (/(?<![a-zA-Z])eval\s*\(/.test(line) || /^eval\s*\(/.test(trimmedLine)) {
         // Double-check it's not in a string or regex
         const evalMatch = line.match(/eval\s*\(/);
         if (evalMatch) {

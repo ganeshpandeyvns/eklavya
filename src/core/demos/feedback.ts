@@ -60,28 +60,41 @@ export class FeedbackService extends EventEmitter {
 
   /**
    * Add feedback for a demo.
+   * @throws Error if demoId or content is missing
    */
   async addFeedback(demoId: string, options: CreateFeedbackOptions): Promise<ClientFeedback> {
+    if (!demoId) {
+      throw new Error('demoId is required');
+    }
+    if (!options.content) {
+      throw new Error('Feedback content is required');
+    }
+
     const db = getDatabase();
 
-    const result = await db.query<{ add_client_feedback: string }>(
-      `SELECT add_client_feedback($1, $2::feedback_sentiment, $3::feedback_category, $4, $5, $6, $7)`,
-      [
-        demoId,
-        options.sentiment || 'neutral',
-        options.category || 'general',
-        options.content,
-        options.pageUrl || null,
-        options.elementId || null,
-        options.screenshot || null,
-      ]
-    );
+    try {
+      const result = await db.query<{ add_client_feedback: string }>(
+        `SELECT add_client_feedback($1, $2::feedback_sentiment, $3::feedback_category, $4, $5, $6, $7)`,
+        [
+          demoId,
+          options.sentiment || 'neutral',
+          options.category || 'general',
+          options.content,
+          options.pageUrl || null,
+          options.elementId || null,
+          options.screenshot || null,
+        ]
+      );
 
-    const feedbackId = result.rows[0].add_client_feedback;
-    const feedback = await this.getFeedback(feedbackId);
+      const feedbackId = result.rows[0].add_client_feedback;
+      const feedback = await this.getFeedback(feedbackId);
 
-    this.emit('feedback:added', feedback);
-    return feedback;
+      this.emit('feedback:added', feedback);
+      return feedback;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to add feedback: ${message}`);
+    }
   }
 
   /**
