@@ -31,8 +31,21 @@ export {
   verifyTaskAccess,
   verifyDemoAccess,
   hasPermission,
+  hasAnyPermission,
+  hasAllPermissions,
+  hasRoleLevel,
+  authorizeEndpoint,
+  getEndpointPermission,
+  getAuthorizationAuditLog,
+  clearAuthorizationAuditLog,
   clearOwnershipCache,
-  type ResourcePermission
+  invalidateProjectCache,
+  ENDPOINT_PERMISSIONS,
+  type ResourcePermission,
+  type ResourceType,
+  type ActionType,
+  type UserRole,
+  type EndpointPermission
 } from './authorization.js';
 
 // Rate Limiting
@@ -44,8 +57,17 @@ export {
   getRateLimiterForMethod,
   isHeavyEndpoint,
   isAuthEndpoint,
+  isSensitiveEndpoint,
   clearRateLimitStore,
+  getRateLimitStatus,
+  setRateLimitEntry,
+  addBypassIP,
+  removeBypassIP,
+  isIPBypassed,
+  smartRateLimit,
+  getEndpointRateLimitConfig,
   RATE_LIMIT_CONFIGS,
+  ENDPOINT_RATE_LIMITS,
   type RateLimitConfig
 } from './rateLimit.js';
 
@@ -56,10 +78,16 @@ export {
   createSecurityMiddleware,
   cors,
   applyCorsHeaders,
+  createCorsMiddleware,
   checkBodySize,
   parseBodyWithLimit,
+  sanitizeInput,
+  sanitizeObject,
+  validateContentType,
+  applySecurity,
   defaultSecurityConfig,
   defaultCorsConfig,
+  DEFAULT_MAX_BODY_SIZE,
   type SecurityHeadersConfig,
   type CorsConfig,
   type BodyLimitConfig

@@ -81,7 +81,7 @@ import {
   getAgentResourceHistory,
 } from './lifecycle.js';
 import { createCoordinator, AgentCoordinator } from '../core/coordination/index.js';
-import { getNotificationService, NotificationLevel } from '../core/notifications/index.js';
+import { getNotificationService, NotificationLevel, NotificationChannel } from '../core/notifications/index.js';
 import { getActivityService, ActivityEventType } from '../core/activity/index.js';
 import { getProgressService } from '../core/progress/index.js';
 import { getDemoService, DemoType, DemoStatus } from '../core/demos/index.js';
@@ -846,7 +846,7 @@ export class ApiServer {
   }
 
   private async getAggregateResourcesHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    await getAggregateResources(req, res);
+    await getAggregateResourcesLifecycle(req, res);
   }
 
   private async garbageCollectHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1439,7 +1439,7 @@ export class ApiServer {
         quietHoursStart?: string;
         quietHoursEnd?: string;
         quietHoursMode?: 'active' | 'busy' | 'away' | 'dnd';
-        levelOverrides?: Record<string, string[]>;
+        levelOverrides?: Record<string, NotificationChannel[]>;
       }>(req);
 
       const notificationService = getNotificationService();

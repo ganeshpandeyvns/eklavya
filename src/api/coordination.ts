@@ -3,11 +3,17 @@
  * Demo₅: Multi-Agent Coordination
  */
 
-import express, { Request, Response, Router } from 'express';
+import express, { Request, Response, Router, RequestHandler } from 'express';
 import { AgentCoordinator, createCoordinator, initializeCoordinator, getCoordinator } from '../core/coordination/index.js';
 import type { AgentType } from '../types/index.js';
 
 const router: Router = express.Router();
+
+// Helper to extract string param (Express params can be string | string[])
+function getParam(param: string | string[] | undefined): string {
+  if (Array.isArray(param)) return param[0] || '';
+  return param || '';
+}
 
 // Store coordinators per project
 const coordinators: Map<string, AgentCoordinator> = new Map();
@@ -26,7 +32,7 @@ function getOrCreateCoordinator(projectId: string): AgentCoordinator {
  */
 router.post('/:projectId/initialize', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { maxConcurrentAgents } = req.body;
 
     const coordinator = createCoordinator({
@@ -56,7 +62,7 @@ router.post('/:projectId/initialize', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/spawn-multiple', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { agents } = req.body;
 
     if (!agents || !Array.isArray(agents)) {
@@ -89,7 +95,7 @@ router.post('/:projectId/spawn-multiple', async (req: Request, res: Response) =>
  */
 router.get('/:projectId/agents', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const agents = await coordinator.getActiveAgents();
@@ -113,7 +119,7 @@ router.get('/:projectId/agents', async (req: Request, res: Response) => {
  */
 router.get('/:projectId/status', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const status = await coordinator.getStatus();
@@ -136,7 +142,7 @@ router.get('/:projectId/status', async (req: Request, res: Response) => {
  */
 router.get('/:projectId/can-spawn', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const result = await coordinator.canSpawnAgent();
@@ -159,7 +165,7 @@ router.get('/:projectId/can-spawn', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/assign', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { tasks } = req.body;
 
     if (!tasks || !Array.isArray(tasks)) {
@@ -192,7 +198,7 @@ router.post('/:projectId/assign', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/route-task', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { taskId, preferredType } = req.body;
 
     if (!taskId) {
@@ -223,7 +229,7 @@ router.post('/:projectId/route-task', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/rebalance', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const result = await coordinator.rebalance();
@@ -246,7 +252,8 @@ router.post('/:projectId/rebalance', async (req: Request, res: Response) => {
  */
 router.delete('/:projectId/agents/:agentId', async (req: Request, res: Response) => {
   try {
-    const { projectId, agentId } = req.params;
+    const projectId = getParam(req.params.projectId);
+    const agentId = getParam(req.params.agentId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const success = await coordinator.terminateAgent(agentId);
@@ -270,7 +277,7 @@ router.delete('/:projectId/agents/:agentId', async (req: Request, res: Response)
  */
 router.post('/:projectId/locks/acquire', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { agentId, filePath, durationMinutes } = req.body;
 
     if (!agentId || !filePath) {
@@ -298,7 +305,8 @@ router.post('/:projectId/locks/acquire', async (req: Request, res: Response) => 
  */
 router.delete('/:projectId/locks/:lockId', async (req: Request, res: Response) => {
   try {
-    const { projectId, lockId } = req.params;
+    const projectId = getParam(req.params.projectId);
+    const lockId = getParam(req.params.lockId);
     const { agentId } = req.body;
 
     if (!agentId) {
@@ -326,7 +334,7 @@ router.delete('/:projectId/locks/:lockId', async (req: Request, res: Response) =
  */
 router.get('/:projectId/locks', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const locks = await coordinator.getActiveLocks();
@@ -350,7 +358,7 @@ router.get('/:projectId/locks', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/locks/check', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { filePath } = req.body;
 
     if (!filePath) {
@@ -383,7 +391,7 @@ router.post('/:projectId/locks/check', async (req: Request, res: Response) => {
  */
 router.get('/:projectId/conflicts', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const coordinator = getOrCreateCoordinator(projectId);
 
     const conflicts = await coordinator.getPendingConflicts();
@@ -407,7 +415,7 @@ router.get('/:projectId/conflicts', async (req: Request, res: Response) => {
  */
 router.post('/:projectId/conflicts/detect', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const { agentAId, agentBId, filePath, conflictType } = req.body;
 
     if (!agentAId || !agentBId || !filePath || !conflictType) {
@@ -438,7 +446,8 @@ router.post('/:projectId/conflicts/detect', async (req: Request, res: Response) 
  */
 router.post('/:projectId/conflicts/:conflictId/resolve', async (req: Request, res: Response) => {
   try {
-    const { projectId, conflictId } = req.params;
+    const projectId = getParam(req.params.projectId);
+    const conflictId = getParam(req.params.conflictId);
     const { resolution, resolvedBy } = req.body;
 
     if (!resolution || !resolvedBy) {
@@ -475,7 +484,7 @@ router.post('/:projectId/conflicts/:conflictId/resolve', async (req: Request, re
  */
 router.post('/:projectId/relay', async (req: Request, res: Response) => {
   try {
-    const { projectId } = req.params;
+    const projectId = getParam(req.params.projectId);
     const message = req.body;
 
     if (!message || !message.type) {

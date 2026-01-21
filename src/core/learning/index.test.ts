@@ -72,7 +72,7 @@ describe('LearningSystem', () => {
 
   describe('Prompt Statistics', () => {
     it('should get prompt statistics', async () => {
-      const stats = await learningSystem.getPromptStats();
+      const stats = await learningSystem.getPromptStats('developer');
       expect(stats).toBeDefined();
       // Stats returns an array or object depending on implementation
       expect(Array.isArray(stats) || typeof stats === 'object').toBe(true);

@@ -47,9 +47,24 @@ describe('Orchestrator', () => {
     agentManager = new AgentManager({
       projectId: testProjectId,
       projectDir,
-      redis: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
+      messageBus,
+      config: {
+        database: {
+          host: process.env.DB_HOST || 'localhost',
+          port: parseInt(process.env.DB_PORT || '5432', 10),
+          database: process.env.DB_NAME || 'eklavya',
+          user: process.env.DB_USER || 'eklavya',
+          password: process.env.DB_PASSWORD || 'eklavya_dev_pwd',
+        },
+        redis: {
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379', 10),
+        },
+        defaultModel: 'claude-sonnet-4-20250514',
+        maxConcurrentAgents: 10,
+        checkpointIntervalMs: 900000,
+        heartbeatIntervalMs: 30000,
+        heartbeatTimeoutMs: 120000,
       },
     });
   });

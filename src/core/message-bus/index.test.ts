@@ -74,6 +74,7 @@ describe('MessageBus', () => {
         toAgentId: testAgentId,
         type: 'task_assign',
         payload: { taskName: 'Test Task' },
+        processed: false,
       });
 
       expect(message).toBeDefined();
@@ -88,6 +89,7 @@ describe('MessageBus', () => {
         fromAgentId: testAgentId,
         type: 'task_complete',
         payload: { status: 'done' },
+        processed: false,
       });
 
       expect(message).toBeDefined();

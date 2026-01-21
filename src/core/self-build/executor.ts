@@ -437,8 +437,10 @@ export class PhaseExecutor extends EventEmitter {
     try {
       // Try to import the agent manager dynamically
       const module = await import('../agent-manager/index.js');
-      if (module.getAgentManager) {
-        return module.getAgentManager();
+      if (module.AgentManager) {
+        // AgentManager class exists but we can't create an instance without config
+        // Return null since we don't have the required configuration
+        return null;
       }
     } catch {
       // Agent manager not available

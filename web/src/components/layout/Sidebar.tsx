@@ -9,6 +9,8 @@ import {
   MessageSquarePlus,
   Upload,
   BarChart3,
+  Brain,
+  DollarSign,
   Settings,
   HelpCircle,
   Menu,
@@ -22,6 +24,7 @@ const navigation = [
   { name: "Projects", href: "/projects", icon: FolderKanban },
   { name: "New Project", href: "/new", icon: MessageSquarePlus },
   { name: "Import Project", href: "/import", icon: Upload },
+  { name: "Learning", href: "/learning", icon: Brain },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
 ];
 

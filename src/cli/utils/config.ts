@@ -6,7 +6,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { getDatabase, type DatabaseConfig } from '../../lib/database.js';
+import { getDatabase } from '../../lib/database.js';
+import type { DatabaseConfig } from '../../types/index.js';
 
 export interface CliConfig {
   database: DatabaseConfig;
@@ -61,13 +62,14 @@ export function loadConfig(): CliConfig {
   }
 
   // Override with environment variables
-  if (process.env.DB_HOST) cachedConfig.database.host = process.env.DB_HOST;
-  if (process.env.DB_PORT) cachedConfig.database.port = parseInt(process.env.DB_PORT, 10);
-  if (process.env.DB_NAME) cachedConfig.database.database = process.env.DB_NAME;
-  if (process.env.DB_USER) cachedConfig.database.user = process.env.DB_USER;
-  if (process.env.DB_PASSWORD) cachedConfig.database.password = process.env.DB_PASSWORD;
+  const config = cachedConfig!;
+  if (process.env.DB_HOST) config.database.host = process.env.DB_HOST;
+  if (process.env.DB_PORT) config.database.port = parseInt(process.env.DB_PORT, 10);
+  if (process.env.DB_NAME) config.database.database = process.env.DB_NAME;
+  if (process.env.DB_USER) config.database.user = process.env.DB_USER;
+  if (process.env.DB_PASSWORD) config.database.password = process.env.DB_PASSWORD;
 
-  return cachedConfig;
+  return config;
 }
 
 export function saveConfig(config: Partial<CliConfig>): void {

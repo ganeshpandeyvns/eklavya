@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 
 /**
- * Security Headers Middleware
+ * Security Headers and CORS Middleware
  *
- * Adds essential security headers to all responses:
+ * Provides comprehensive security features:
  * - Content-Security-Policy
  * - X-Frame-Options
  * - X-Content-Type-Options
@@ -11,6 +11,9 @@ import type { IncomingMessage, ServerResponse } from 'http';
  * - X-XSS-Protection
  * - Referrer-Policy
  * - Permissions-Policy
+ * - CORS with configurable whitelist
+ * - Request body size limits
+ * - Input sanitization
  */
 
 export interface SecurityHeadersConfig {
@@ -159,12 +162,38 @@ export interface CorsConfig {
   maxAge?: number;             // Preflight cache duration in seconds
 }
 
+/**
+ * Parse CORS origins from environment variable
+ * Supports comma-separated list: "http://localhost:3000,https://app.example.com"
+ * Also supports wildcard subdomains: "*.example.com"
+ */
+function parseCorsOrigins(): string[] {
+  const envOrigins = process.env.CORS_ORIGINS || process.env.ALLOWED_ORIGINS || '';
+  return envOrigins
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+}
+
 // Default CORS configuration
 const defaultCorsConfig: CorsConfig = {
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean),
+  allowedOrigins: parseCorsOrigins(),
   allowedMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'X-Request-ID',
+    'X-Correlation-ID'
+  ],
+  exposedHeaders: [
+    'X-RateLimit-Limit',
+    'X-RateLimit-Remaining',
+    'X-RateLimit-Reset',
+    'X-Request-ID'
+  ],
   credentials: true,
   maxAge: 86400 // 24 hours
 };
@@ -173,16 +202,19 @@ const defaultCorsConfig: CorsConfig = {
  * Check if origin is allowed
  */
 function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  // If no origins configured, deny all (secure by default)
+  // If no origins configured, check environment
   if (allowedOrigins.length === 0) {
-    // In development, allow localhost origins
-    if (process.env.NODE_ENV === 'development' || process.env.CORS_ALLOW_ALL === 'true') {
+    // In development or if CORS_ALLOW_ALL is set, allow any origin
+    if (process.env.NODE_ENV === 'development' ||
+        process.env.CORS_ALLOW_ALL === 'true' ||
+        process.env.AUTH_DISABLED === 'true') {
       return true;
     }
+    // In production with no whitelist, deny all cross-origin requests
     return false;
   }
 
-  // Check for wildcard
+  // Check for wildcard (allow all)
   if (allowedOrigins.includes('*')) {
     return true;
   }
@@ -193,13 +225,52 @@ function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
   }
 
   // Check pattern match (e.g., *.example.com)
-  return allowedOrigins.some(allowed => {
+  for (const allowed of allowedOrigins) {
+    // Wildcard subdomain pattern
     if (allowed.startsWith('*.')) {
-      const domain = allowed.slice(2);
-      return origin.endsWith(domain) || origin.endsWith('.' + domain);
+      const domain = allowed.slice(2); // Remove "*."
+      try {
+        const originUrl = new URL(origin);
+        const originHost = originUrl.host;
+        // Match exact domain or any subdomain
+        if (originHost === domain || originHost.endsWith('.' + domain)) {
+          return true;
+        }
+      } catch {
+        // Invalid origin URL, continue checking
+      }
     }
-    return false;
-  });
+
+    // Protocol-agnostic matching (optional)
+    if (allowed.startsWith('//')) {
+      const pattern = allowed.slice(2);
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.host === pattern || originUrl.host.endsWith('.' + pattern)) {
+          return true;
+        }
+      } catch {
+        // Invalid origin URL, continue checking
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Log CORS decision for debugging
+ */
+function logCorsDecision(origin: string | undefined, allowed: boolean, reason?: string): void {
+  if (process.env.CORS_DEBUG === 'true' || process.env.NODE_ENV === 'development') {
+    console.log(JSON.stringify({
+      type: 'CORS_DECISION',
+      timestamp: new Date().toISOString(),
+      origin: origin || 'none',
+      allowed,
+      reason
+    }));
+  }
 }
 
 /**
@@ -212,18 +283,28 @@ export function applyCorsHeaders(
 ): boolean {
   const origin = req.headers.origin;
 
-  // Check if origin is allowed
-  if (origin) {
-    if (isOriginAllowed(origin, config.allowedOrigins)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-    } else {
-      // Origin not allowed - don't set CORS headers
-      // For OPTIONS requests, this will cause the preflight to fail
-      return false;
+  // No origin header = same-origin request or non-browser request
+  if (!origin) {
+    // In development, allow requests without origin (e.g., curl, Postman)
+    if (process.env.NODE_ENV === 'development' || process.env.AUTH_DISABLED === 'true') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      logCorsDecision(undefined, true, 'no_origin_dev_mode');
+      return true;
     }
-  } else if (process.env.NODE_ENV === 'development') {
-    // Allow requests without origin in development (e.g., curl, Postman)
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // In production, allow same-origin requests (no header needed)
+    logCorsDecision(undefined, true, 'no_origin_same_origin');
+    return true;
+  }
+
+  // Check if origin is in the whitelist
+  if (isOriginAllowed(origin, config.allowedOrigins)) {
+    // Set the specific origin (not * when using credentials)
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    logCorsDecision(origin, true, 'whitelisted');
+  } else {
+    // Origin not allowed - don't set CORS headers
+    logCorsDecision(origin, false, 'not_whitelisted');
+    return false;
   }
 
   // Allow credentials if configured
@@ -241,14 +322,25 @@ export function applyCorsHeaders(
     res.setHeader('Access-Control-Allow-Headers', config.allowedHeaders.join(', '));
   }
 
-  // Exposed headers
+  // Exposed headers (headers the browser can access)
   if (config.exposedHeaders && config.exposedHeaders.length > 0) {
     res.setHeader('Access-Control-Expose-Headers', config.exposedHeaders.join(', '));
   }
 
-  // Preflight cache
+  // Preflight cache duration
   if (config.maxAge !== undefined) {
     res.setHeader('Access-Control-Max-Age', config.maxAge.toString());
+  }
+
+  // Add Vary header to indicate response varies based on Origin
+  const existingVary = res.getHeader('Vary');
+  if (existingVary) {
+    const varyValue = Array.isArray(existingVary) ? existingVary.join(', ') : String(existingVary);
+    if (!varyValue.includes('Origin')) {
+      res.setHeader('Vary', `${varyValue}, Origin`);
+    }
+  } else {
+    res.setHeader('Vary', 'Origin');
   }
 
   return true;
@@ -265,14 +357,17 @@ export async function cors(
   res: ServerResponse,
   config?: CorsConfig
 ): Promise<boolean> {
-  const isAllowed = applyCorsHeaders(req, res, config || defaultCorsConfig);
+  const effectiveConfig = config || defaultCorsConfig;
+  const isAllowed = applyCorsHeaders(req, res, effectiveConfig);
 
-  // Handle preflight
+  // Handle preflight (OPTIONS) request
   if (req.method === 'OPTIONS') {
     if (isAllowed) {
+      // Successful preflight - return 204 No Content
       res.writeHead(204);
       res.end();
     } else {
+      // Origin not allowed
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         error: 'CORS not allowed from this origin',
@@ -282,7 +377,33 @@ export async function cors(
     return false; // Signal to stop processing (preflight handled)
   }
 
-  return isAllowed;
+  // For non-preflight requests, if origin is not allowed, we can either:
+  // 1. Reject the request (strict mode)
+  // 2. Allow but without CORS headers (browser will block on client side)
+  // We choose option 1 for security
+  if (!isAllowed && req.headers.origin) {
+    const strictMode = process.env.CORS_STRICT_MODE !== 'false';
+    if (strictMode) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Cross-origin request not allowed from this origin',
+        code: 'CORS_ORIGIN_DENIED'
+      }));
+      return false;
+    }
+    // Non-strict mode: let browser handle the CORS error
+  }
+
+  return true;
+}
+
+/**
+ * Create CORS middleware with custom config
+ */
+export function createCorsMiddleware(config: CorsConfig) {
+  return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    return cors(req, res, config);
+  };
 }
 
 /**
@@ -296,6 +417,16 @@ export interface BodyLimitConfig {
 const DEFAULT_MAX_BODY_SIZE = 1024 * 1024; // 1MB
 
 /**
+ * Get maximum body size from environment or config
+ */
+function getMaxBodySize(config?: BodyLimitConfig): number {
+  if (config?.maxSize) {
+    return config.maxSize;
+  }
+  return parseInt(process.env.MAX_BODY_SIZE || String(DEFAULT_MAX_BODY_SIZE), 10);
+}
+
+/**
  * Check if request body size is within limits
  */
 export function checkBodySize(
@@ -303,8 +434,7 @@ export function checkBodySize(
   res: ServerResponse,
   config?: BodyLimitConfig
 ): boolean {
-  const maxSize = config?.maxSize ||
-    parseInt(process.env.MAX_BODY_SIZE || String(DEFAULT_MAX_BODY_SIZE), 10);
+  const maxSize = getMaxBodySize(config);
 
   // Check Content-Length header
   const contentLength = req.headers['content-length'];
@@ -315,7 +445,8 @@ export function checkBodySize(
       res.end(JSON.stringify({
         error: 'Request body too large',
         code: 'PAYLOAD_TOO_LARGE',
-        maxSize
+        maxSize,
+        receivedSize: length
       }));
       return false;
     }
@@ -347,7 +478,8 @@ export async function parseBodyWithLimit<T>(
         res.end(JSON.stringify({
           error: 'Request body too large',
           code: 'PAYLOAD_TOO_LARGE',
-          maxSize
+          maxSize,
+          receivedSize: totalSize
         }));
         resolve(null);
         return;
@@ -360,7 +492,8 @@ export async function parseBodyWithLimit<T>(
       if (limitExceeded) return;
 
       try {
-        resolve(JSON.parse(body || '{}') as T);
+        const parsed = JSON.parse(body || '{}') as T;
+        resolve(parsed);
       } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -384,9 +517,134 @@ export async function parseBodyWithLimit<T>(
 }
 
 /**
+ * Input sanitization - basic HTML/script tag removal
+ * For more comprehensive sanitization, use a library like DOMPurify
+ */
+export function sanitizeInput(input: string): string {
+  if (typeof input !== 'string') {
+    return input;
+  }
+
+  // Remove script tags and their content
+  let sanitized = input.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+
+  // Remove on* event handlers
+  sanitized = sanitized.replace(/\bon\w+\s*=\s*["'][^"']*["']/gi, '');
+  sanitized = sanitized.replace(/\bon\w+\s*=\s*[^\s>]*/gi, '');
+
+  // Remove javascript: protocol
+  sanitized = sanitized.replace(/javascript:/gi, '');
+
+  // Remove data: protocol for potentially dangerous content types
+  sanitized = sanitized.replace(/data:(?!image\/)/gi, '');
+
+  return sanitized;
+}
+
+/**
+ * Deep sanitize an object (recursively sanitize string values)
+ */
+export function sanitizeObject<T extends object>(obj: T): T {
+  if (Array.isArray(obj)) {
+    return obj.map(item => {
+      if (typeof item === 'string') {
+        return sanitizeInput(item);
+      } else if (typeof item === 'object' && item !== null) {
+        return sanitizeObject(item);
+      }
+      return item;
+    }) as T;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === 'string') {
+      result[key] = sanitizeInput(value);
+    } else if (typeof value === 'object' && value !== null) {
+      result[key] = sanitizeObject(value as object);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
+/**
+ * Validate content type
+ */
+export function validateContentType(
+  req: IncomingMessage,
+  res: ServerResponse,
+  allowedTypes: string[] = ['application/json']
+): boolean {
+  const contentType = req.headers['content-type'];
+
+  // No content type is OK for GET/HEAD/DELETE
+  if (!contentType && ['GET', 'HEAD', 'DELETE'].includes(req.method || '')) {
+    return true;
+  }
+
+  // POST/PUT/PATCH should have content type
+  if (!contentType) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'Content-Type header is required',
+      code: 'MISSING_CONTENT_TYPE'
+    }));
+    return false;
+  }
+
+  // Check if content type matches allowed types (ignore charset and other params)
+  const mimeType = contentType.split(';')[0].trim().toLowerCase();
+  if (!allowedTypes.some(allowed => mimeType === allowed.toLowerCase())) {
+    res.writeHead(415, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'Unsupported content type',
+      code: 'UNSUPPORTED_MEDIA_TYPE',
+      allowedTypes
+    }));
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Combined security middleware that applies all security measures
+ */
+export async function applySecurity(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options?: {
+    securityHeaders?: SecurityHeadersConfig;
+    corsConfig?: CorsConfig;
+    maxBodySize?: number;
+  }
+): Promise<boolean> {
+  // Apply security headers
+  applySecurityHeaders(res, options?.securityHeaders);
+
+  // Handle CORS
+  const corsResult = await cors(req, res, options?.corsConfig);
+  if (!corsResult) {
+    return false;
+  }
+
+  // Check body size for write operations
+  if (['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
+    if (!checkBodySize(req, res, { maxSize: options?.maxBodySize || DEFAULT_MAX_BODY_SIZE })) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Export all security utilities
  */
 export {
   defaultConfig as defaultSecurityConfig,
-  defaultCorsConfig
+  defaultCorsConfig,
+  DEFAULT_MAX_BODY_SIZE
 };

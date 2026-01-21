@@ -280,12 +280,12 @@ export class TaskQueue extends EventEmitter {
     try {
       const db = getDatabase();
 
-      const result = await db.query<{ status: string; retry_count: number; max_retries: number }>(
+      const result = await db.query<{ result: { status: string; retry_count: number; max_retries: number } }>(
         `SELECT fail_task($1, $2, $3) as result`,
         [taskId, errorMessage, shouldRetry]
       );
 
-      const failResult = result.rows[0]?.result as { status: string; retry_count: number; max_retries: number };
+      const failResult = result.rows[0]?.result;
 
       if (failResult.status === 'retrying') {
         this.emit('task:retrying', { taskId, retryCount: failResult.retry_count, maxRetries: failResult.max_retries });

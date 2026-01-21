@@ -119,14 +119,14 @@ async function testTaskQueueOperations(): Promise<number> {
     });
     const task = await res.json() as { id: string; title: string; priority: number };
     testTaskId = task.id;
-    return res.status === 201 && task.id && task.priority === 8;
+    return res.status === 201 && !!task.id && task.priority === 8;
   })) passed++;
 
   // Test 2: Get task by ID
   if (await runTest('Get task by ID with details', 'task_queue', async () => {
     const res = await fetch(`${CONFIG.apiUrl}/api/tasks/${testTaskId}`);
     const task = await res.json() as { id: string; specification: unknown };
-    return res.ok && task.id === testTaskId && task.specification;
+    return res.ok && task.id === testTaskId && !!task.specification;
   })) passed++;
 
   // Test 3: List tasks with filters
@@ -140,14 +140,14 @@ async function testTaskQueueOperations(): Promise<number> {
   if (await runTest('Get task queue statistics', 'task_queue', async () => {
     const res = await fetch(`${CONFIG.apiUrl}/api/tasks/queue/stats?projectId=${testProjectId}`);
     const stats = await res.json() as { statusBreakdown: Record<string, number>; metrics: unknown };
-    return res.ok && typeof stats.statusBreakdown === 'object' && stats.metrics;
+    return res.ok && typeof stats.statusBreakdown === 'object' && !!stats.metrics;
   })) passed++;
 
   // Test 5: Get next available task
   if (await runTest('Get next available task for agent type', 'task_queue', async () => {
     const res = await fetch(`${CONFIG.apiUrl}/api/tasks/queue/next?projectId=${testProjectId}&agentType=developer`);
     const result = await res.json() as { task: { id: string } | null };
-    return res.ok && (result.task === null || result.task.id);
+    return res.ok && (result.task === null || !!result.task.id);
   })) passed++;
 
   return passed;
@@ -379,7 +379,7 @@ async function testCheckpointSystem(): Promise<number> {
       }),
     });
     const result = await res.json() as { success: boolean; checkpointId: string };
-    return res.ok && result.success && result.checkpointId;
+    return res.ok && result.success && !!result.checkpointId;
   })) passed++;
 
   // Test 2: Get checkpoint stats
@@ -404,7 +404,7 @@ async function testCheckpointSystem(): Promise<number> {
       body: JSON.stringify({}), // Will use latest checkpoint
     });
     const result = await res.json() as { success: boolean; restoredState: unknown };
-    return res.ok && result.success && result.restoredState;
+    return res.ok && result.success && !!result.restoredState;
   })) passed++;
 
   return passed;
@@ -429,7 +429,7 @@ async function testAgentMessaging(): Promise<number> {
       }),
     });
     const result = await res.json() as { success: boolean; messageId: string };
-    return res.ok && result.success && result.messageId;
+    return res.ok && result.success && !!result.messageId;
   })) passed++;
 
   // Test 2: Get agent messages

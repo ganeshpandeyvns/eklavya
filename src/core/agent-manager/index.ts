@@ -7,6 +7,7 @@ import type { Agent, AgentType, AgentStatus, EklavyaConfig, Prompt } from '../..
 import { getDatabase } from '../../lib/database.js';
 import { MessageBus } from '../message-bus/index.js';
 import { getLearningSystem } from '../learning/index.js';
+import { getCostTracker } from '../cost/index.js';
 
 export interface AgentManagerOptions {
   config: EklavyaConfig;
@@ -101,10 +102,61 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Check if project has budget remaining
+   */
+  async checkBudget(): Promise<boolean> {
+    try {
+      const costTracker = getCostTracker();
+      return await costTracker.enforceBudgetLimit(this.projectId);
+    } catch (error) {
+      console.error('Failed to check budget:', error);
+      // If we can't check budget, allow the operation to proceed
+      return true;
+    }
+  }
+
+  /**
+   * Record token usage for an agent
+   */
+  async recordTokenUsage(
+    agentId: string,
+    model: string,
+    inputTokens: number,
+    outputTokens: number,
+    taskId?: string
+  ): Promise<void> {
+    try {
+      const costTracker = getCostTracker();
+      await costTracker.recordApiCall(this.projectId, {
+        model,
+        inputTokens,
+        outputTokens,
+        agentId,
+        taskId,
+        requestType: 'completion',
+      });
+
+      // Update agent metrics
+      const entry = this.agents.get(agentId);
+      if (entry) {
+        entry.agent.metrics.tokensUsed += inputTokens + outputTokens;
+      }
+    } catch (error) {
+      console.error('Failed to record token usage:', error);
+    }
+  }
+
+  /**
    * Spawn a single agent with RL-based prompt selection
    */
   async spawnAgent(options: SpawnAgentOptions): Promise<RLAgent> {
     try {
+      // Check budget before spawning
+      const withinBudget = await this.checkBudget();
+      if (!withinBudget) {
+        throw new Error('Project budget exceeded. Cannot spawn new agents.');
+      }
+
       const db = getDatabase();
       const learningSystem = getLearningSystem();
       const agentId = uuidv4();
@@ -183,6 +235,12 @@ export class AgentManager extends EventEmitter {
   async spawnParallelAgents(
     agentConfigs: SpawnAgentOptions[]
   ): Promise<RLAgent[]> {
+    // Check budget before spawning multiple agents
+    const withinBudget = await this.checkBudget();
+    if (!withinBudget) {
+      throw new Error('Project budget exceeded. Cannot spawn new agents.');
+    }
+
     // Check concurrent agent limit
     const currentActive = this.getActiveAgentCount();
     const maxAllowed = this.config.maxConcurrentAgents;
