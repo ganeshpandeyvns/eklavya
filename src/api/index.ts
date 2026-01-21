@@ -55,6 +55,9 @@ import {
   getAgentResourceHistory,
 } from './lifecycle.js';
 import { createCoordinator, AgentCoordinator } from '../core/coordination/index.js';
+import { getNotificationService, NotificationLevel } from '../core/notifications/index.js';
+import { getActivityService, ActivityEventType } from '../core/activity/index.js';
+import { getProgressService } from '../core/progress/index.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -181,6 +184,31 @@ export class ApiServer {
 
     // Demo₅: Messaging
     this.route('POST', '/api/coordination/:projectId/relay', this.relayMessageHandler);
+
+    // Demo₆: Notifications
+    this.route('GET', '/api/notifications', this.getNotificationsHandler);
+    this.route('GET', '/api/notifications/unread', this.getUnreadCountHandler);
+    this.route('POST', '/api/notifications/:notificationId/read', this.markNotificationReadHandler);
+    this.route('POST', '/api/notifications/:notificationId/acknowledge', this.acknowledgeNotificationHandler);
+    this.route('DELETE', '/api/notifications/:notificationId', this.deleteNotificationHandler);
+    this.route('POST', '/api/notifications', this.createNotificationHandler);
+
+    // Demo₆: Activity Stream
+    this.route('GET', '/api/activity/recent', this.getRecentActivityHandler);
+    this.route('GET', '/api/projects/:projectId/activity-stream', this.getProjectActivityStreamHandler);
+    this.route('GET', '/api/activity/stats', this.getActivityStatsHandler);
+    this.route('POST', '/api/activity', this.logActivityHandler);
+
+    // Demo₆: Progress Tracking
+    this.route('GET', '/api/projects/:projectId/progress', this.getProjectProgressHandler);
+    this.route('GET', '/api/progress/all', this.getAllProgressHandler);
+    this.route('POST', '/api/projects/:projectId/progress/snapshot', this.saveProgressSnapshotHandler);
+    this.route('GET', '/api/projects/:projectId/progress/history', this.getProgressHistoryHandler);
+
+    // Demo₆: Notification Settings
+    this.route('GET', '/api/settings/notifications', this.getNotificationSettingsHandler);
+    this.route('PUT', '/api/settings/notifications', this.updateNotificationSettingsHandler);
+    this.route('PUT', '/api/settings/availability', this.updateAvailabilityHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -882,6 +910,324 @@ export class ApiServer {
       await coordinator.relay({ ...message, projectId } as any);
 
       this.sendJson(res, 200, { success: true });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₆: Notification handlers
+  private async getNotificationsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const projectId = url.searchParams.get('projectId') || undefined;
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const unreadOnly = url.searchParams.get('unreadOnly') === 'true';
+      const level = url.searchParams.get('level') as NotificationLevel | undefined;
+
+      const notificationService = getNotificationService();
+      const notifications = await notificationService.getNotifications(projectId, {
+        limit,
+        offset,
+        unreadOnly,
+        level,
+      });
+
+      this.sendJson(res, 200, { success: true, notifications, count: notifications.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getUnreadCountHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const projectId = url.searchParams.get('projectId') || undefined;
+
+      const notificationService = getNotificationService();
+      const count = await notificationService.getUnreadCount(projectId);
+
+      this.sendJson(res, 200, { success: true, ...count });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async markNotificationReadHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { notificationId } = params;
+
+      const notificationService = getNotificationService();
+      const success = await notificationService.markAsRead(notificationId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async acknowledgeNotificationHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { notificationId } = params;
+
+      const notificationService = getNotificationService();
+      const success = await notificationService.acknowledge(notificationId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async deleteNotificationHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { notificationId } = params;
+
+      const notificationService = getNotificationService();
+      const success = await notificationService.deleteNotification(notificationId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async createNotificationHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseBody<{
+        projectId: string;
+        level: NotificationLevel;
+        eventType: string;
+        title: string;
+        message?: string;
+        agentId?: string;
+        taskId?: string;
+        metadata?: Record<string, unknown>;
+      }>(req);
+
+      if (!body.projectId || !body.level || !body.eventType || !body.title) {
+        return this.sendJson(res, 400, { success: false, error: 'projectId, level, eventType, and title are required' });
+      }
+
+      const notificationService = getNotificationService();
+      const notification = await notificationService.createNotification(
+        body.projectId,
+        body.level,
+        body.eventType,
+        body.title,
+        {
+          message: body.message,
+          agentId: body.agentId,
+          taskId: body.taskId,
+          metadata: body.metadata,
+        }
+      );
+
+      this.sendJson(res, 201, { success: true, notification });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₆: Activity Stream handlers
+  private async getRecentActivityHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+
+      const activityService = getActivityService();
+      const activities = await activityService.getRecentActivity(limit);
+
+      this.sendJson(res, 200, { success: true, activities, count: activities.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getProjectActivityStreamHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const since = url.searchParams.get('since');
+      const eventType = url.searchParams.get('eventType') as ActivityEventType | undefined;
+
+      const activityService = getActivityService();
+      const activities = await activityService.getActivityStream({
+        projectId,
+        limit,
+        offset,
+        since: since ? new Date(since) : undefined,
+        eventType,
+      });
+
+      this.sendJson(res, 200, { success: true, activities, count: activities.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getActivityStatsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const projectId = url.searchParams.get('projectId') || undefined;
+
+      const activityService = getActivityService();
+      const stats = await activityService.getActivityStats(projectId);
+
+      this.sendJson(res, 200, { success: true, stats });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async logActivityHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseBody<{
+        projectId: string;
+        eventType: ActivityEventType;
+        action: string;
+        details?: string;
+        agentId?: string;
+        agentType?: string;
+        taskId?: string;
+        filePath?: string;
+        notificationLevel?: NotificationLevel;
+      }>(req);
+
+      if (!body.projectId || !body.eventType || !body.action) {
+        return this.sendJson(res, 400, { success: false, error: 'projectId, eventType, and action are required' });
+      }
+
+      const activityService = getActivityService();
+      const activity = await activityService.logActivity(
+        body.projectId,
+        body.eventType,
+        body.action,
+        {
+          details: body.details,
+          agentId: body.agentId,
+          agentType: body.agentType,
+          taskId: body.taskId,
+          filePath: body.filePath,
+          notificationLevel: body.notificationLevel,
+        }
+      );
+
+      this.sendJson(res, 201, { success: true, activity });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₆: Progress handlers
+  private async getProjectProgressHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+
+      const progressService = getProgressService();
+      const progress = await progressService.getProjectProgress(projectId);
+
+      this.sendJson(res, 200, { success: true, progress });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getAllProgressHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const progressService = getProgressService();
+      const projects = await progressService.getAllProjectsProgress();
+
+      this.sendJson(res, 200, { success: true, projects, count: projects.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async saveProgressSnapshotHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+
+      const progressService = getProgressService();
+      const snapshot = await progressService.saveProgressSnapshot(projectId);
+
+      this.sendJson(res, 201, { success: true, snapshot });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getProgressHistoryHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+      const since = url.searchParams.get('since');
+
+      const progressService = getProgressService();
+      const history = await progressService.getProgressHistory(projectId, {
+        limit,
+        since: since ? new Date(since) : undefined,
+      });
+
+      this.sendJson(res, 200, { success: true, history, count: history.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₆: Settings handlers
+  private async getNotificationSettingsHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const notificationService = getNotificationService();
+      const settings = await notificationService.getSettings();
+
+      this.sendJson(res, 200, { success: true, settings });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async updateNotificationSettingsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseBody<{
+        availabilityMode?: 'active' | 'busy' | 'away' | 'dnd';
+        emailEnabled?: boolean;
+        pushEnabled?: boolean;
+        smsEnabled?: boolean;
+        quietHoursStart?: string;
+        quietHoursEnd?: string;
+        quietHoursMode?: 'active' | 'busy' | 'away' | 'dnd';
+        levelOverrides?: Record<string, string[]>;
+      }>(req);
+
+      const notificationService = getNotificationService();
+      const settings = await notificationService.updateSettings(body);
+
+      this.sendJson(res, 200, { success: true, settings });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async updateAvailabilityHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await this.parseBody<{ mode: 'active' | 'busy' | 'away' | 'dnd' }>(req);
+
+      if (!body.mode) {
+        return this.sendJson(res, 400, { success: false, error: 'mode is required' });
+      }
+
+      if (!['active', 'busy', 'away', 'dnd'].includes(body.mode)) {
+        return this.sendJson(res, 400, { success: false, error: 'Invalid availability mode' });
+      }
+
+      const notificationService = getNotificationService();
+      await notificationService.setAvailabilityMode(body.mode);
+
+      this.sendJson(res, 200, { success: true, mode: body.mode });
     } catch (error) {
       this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
     }
