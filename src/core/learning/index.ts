@@ -1,19 +1,26 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { AgentType, Prompt, LearningEvent, PromptStatus } from '../../types/index.js';
 import { getDatabase } from '../../lib/database.js';
+import { getCache, CacheKeys } from '../../lib/cache.js';
 
 export interface LearningSystemOptions {
   explorationRate: number;  // Percentage of traffic for experimental prompts
   candidateRate: number;    // Percentage for candidate prompts
+  promptCacheTtlMs?: number; // TTL for prompt cache in milliseconds
 }
+
+// Default cache TTL for prompts (30 seconds)
+const DEFAULT_PROMPT_CACHE_TTL_MS = 30000;
 
 export class LearningSystem {
   private explorationRate: number;
   private candidateRate: number;
+  private promptCacheTtlMs: number;
 
   constructor(options: LearningSystemOptions = { explorationRate: 0.1, candidateRate: 0.3 }) {
     this.explorationRate = options.explorationRate;
     this.candidateRate = options.candidateRate;
+    this.promptCacheTtlMs = options.promptCacheTtlMs || DEFAULT_PROMPT_CACHE_TTL_MS;
   }
 
   /**
@@ -22,14 +29,24 @@ export class LearningSystem {
   async selectPrompt(agentType: AgentType): Promise<Prompt | null> {
     try {
       const db = getDatabase();
-      const result = await db.query<Prompt>(
-        `SELECT * FROM prompts WHERE agent_type = $1 AND status != 'deprecated'`,
-        [agentType]
-      );
+      const cache = getCache();
 
-      if (result.rows.length === 0) return null;
+      // Try to get prompts from cache first
+      const cacheKey = CacheKeys.promptList(agentType);
+      let prompts = cache.get<Prompt[]>(cacheKey);
 
-      const prompts = result.rows;
+      if (!prompts) {
+        // Query with LIMIT to prevent unbounded results
+        const result = await db.query<Prompt>(
+          `SELECT * FROM prompts WHERE agent_type = $1 AND status != 'deprecated' LIMIT 100`,
+          [agentType]
+        );
+        prompts = result.rows;
+        // Cache the prompt list
+        cache.set(cacheKey, prompts, this.promptCacheTtlMs);
+      }
+
+      if (prompts.length === 0) return null;
 
     // Group by status
     const production = prompts.filter(p => p.status === 'production');

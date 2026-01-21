@@ -10,6 +10,10 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import { getDatabase } from '../lib/database.js';
+import { getCache, CacheKeys } from '../lib/cache.js';
+
+// Cache TTL for dashboard stats (5 seconds for real-time feel, but reduces load)
+const DASHBOARD_STATS_CACHE_TTL_MS = 5000;
 
 /**
  * GET /api/dashboard/stats
@@ -19,9 +23,20 @@ export async function getDashboardStats(
   _req: IncomingMessage,
   res: ServerResponse
 ): Promise<void> {
-  const db = getDatabase();
+  const cache = getCache();
+  const cacheKey = CacheKeys.dashboardStats();
 
   try {
+    // Try to get from cache first
+    const cachedStats = cache.get<Record<string, unknown>>(cacheKey);
+    if (cachedStats) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(cachedStats));
+      return;
+    }
+
+    const db = getDatabase();
+
     // Get active projects count
     const projectsResult = await db.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM projects WHERE status NOT IN ('completed', 'archived')`
@@ -68,6 +83,9 @@ export async function getDashboardStats(
       openBugs: parseInt(additionalStats.rows[0]?.open_bugs || '0'),
     };
 
+    // Cache the stats
+    cache.set(cacheKey, stats, DASHBOARD_STATS_CACHE_TTL_MS);
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(stats));
   } catch (error) {
@@ -89,45 +107,32 @@ export async function getProjectActivity(
   const db = getDatabase();
 
   try {
-    // Get recent messages as activity
-    const messagesResult = await db.query<{
+    // Use a single JOIN query to get messages with agent info (fixes N+1 query)
+    const result = await db.query<{
       id: string;
       type: string;
       from_agent_id: string;
       payload: string;
       created_at: Date;
+      agent_type: string | null;
     }>(
-      `SELECT m.id, m.type, m.from_agent_id, m.payload, m.created_at
+      `SELECT m.id, m.type, m.from_agent_id, m.payload, m.created_at, a.type as agent_type
        FROM messages m
+       LEFT JOIN agents a ON m.from_agent_id = a.id
        WHERE m.project_id = $1
        ORDER BY m.created_at DESC
        LIMIT 50`,
       [projectId]
     );
 
-    // Get agent info for activity items
-    const agentIds = [...new Set(messagesResult.rows.map(m => m.from_agent_id).filter(Boolean))];
-    const agentsMap = new Map<string, { type: string }>();
-
-    if (agentIds.length > 0) {
-      const agentsResult = await db.query<{ id: string; type: string }>(
-        `SELECT id, type FROM agents WHERE id = ANY($1)`,
-        [agentIds]
-      );
-      for (const agent of agentsResult.rows) {
-        agentsMap.set(agent.id, { type: agent.type });
-      }
-    }
-
     // Transform to activity items
-    const activities = messagesResult.rows.map((msg) => {
-      const agent = msg.from_agent_id ? agentsMap.get(msg.from_agent_id) : null;
+    const activities = result.rows.map((msg) => {
       const payload = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;
 
       return {
         id: msg.id,
         projectId,
-        agentType: agent?.type || 'system',
+        agentType: msg.agent_type || 'system',
         agentId: msg.from_agent_id,
         action: formatMessageType(msg.type),
         details: payload.message || payload.status || null,
@@ -419,13 +424,18 @@ export async function getPromptStats(
 /**
  * GET /api/projects/:projectId/timeline
  * Returns project execution timeline
+ * Supports optional limit parameter (default 100)
  */
 export async function getProjectTimeline(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   projectId: string
 ): Promise<void> {
   const db = getDatabase();
+
+  // Parse limit from query string (default 100)
+  const url = new URL(req.url || '', `http://${req.headers.host}`);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
 
   try {
     // Get project info
@@ -448,7 +458,7 @@ export async function getProjectTimeline(
 
     const project = projectResult.rows[0];
 
-    // Get task timeline
+    // Get task timeline with LIMIT
     const tasksResult = await db.query<{
       id: string;
       title: string;
@@ -460,11 +470,12 @@ export async function getProjectTimeline(
       `SELECT id, title, status, created_at, started_at, completed_at
        FROM tasks
        WHERE project_id = $1
-       ORDER BY created_at ASC`,
-      [projectId]
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [projectId, limit]
     );
 
-    // Get agent spawn/complete timeline
+    // Get agent spawn/complete timeline with LIMIT
     const agentsResult = await db.query<{
       id: string;
       type: string;
@@ -475,8 +486,9 @@ export async function getProjectTimeline(
       `SELECT id, type, status, created_at, updated_at
        FROM agents
        WHERE project_id = $1
-       ORDER BY created_at ASC`,
-      [projectId]
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [projectId, limit]
     );
 
     const timeline = {
@@ -511,6 +523,7 @@ export async function getProjectTimeline(
         totalAgents: agentsResult.rows.length,
         activeAgents: agentsResult.rows.filter(a => ['working', 'idle'].includes(a.status)).length,
       },
+      limit,
     };
 
     res.writeHead(200, { 'Content-Type': 'application/json' });

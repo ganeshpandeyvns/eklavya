@@ -333,6 +333,7 @@ export class Orchestrator extends EventEmitter {
 
   /**
    * Wait for all agents in a phase to complete
+   * Uses proper listener cleanup to prevent memory leaks
    */
   private async waitForAgents(
     agents: RLAgent[],
@@ -340,14 +341,35 @@ export class Orchestrator extends EventEmitter {
   ): Promise<Array<{ taskId: string; success: boolean; agentId: string }>> {
     const results: Array<{ taskId: string; success: boolean; agentId: string }> = [];
 
+    // Track active listeners for cleanup
+    const activeListeners: Array<{
+      handler: (event: { agent: RLAgent; outcome: { success: boolean } }) => void;
+      timeoutId: NodeJS.Timeout;
+    }> = [];
+
     // Create promises for each agent completion
     const completionPromises = agents.map((agent, index) => {
       return new Promise<{ taskId: string; success: boolean; agentId: string }>((resolve) => {
         const task = tasks[index];
+        let resolved = false;
+
+        // Cleanup function to remove listener and clear timeout
+        const cleanup = (handler: typeof handleOutcome, timeoutId: NodeJS.Timeout) => {
+          if (!resolved) {
+            resolved = true;
+            this.agentManager.off('agent:outcome', handler);
+            clearTimeout(timeoutId);
+          }
+        };
 
         const handleOutcome = (event: { agent: RLAgent; outcome: { success: boolean } }) => {
-          if (event.agent.id === agent.id) {
-            this.agentManager.off('agent:outcome', handleOutcome);
+          if (event.agent.id === agent.id && !resolved) {
+            // Find and clean up this listener's tracking entry
+            const listenerIndex = activeListeners.findIndex(l => l.handler === handleOutcome);
+            if (listenerIndex !== -1) {
+              cleanup(handleOutcome, activeListeners[listenerIndex].timeoutId);
+              activeListeners.splice(listenerIndex, 1);
+            }
 
             const success = event.outcome.success;
             if (success) {
@@ -366,24 +388,35 @@ export class Orchestrator extends EventEmitter {
           }
         };
 
-        this.agentManager.on('agent:outcome', handleOutcome);
-
         // Timeout after 30 minutes
-        setTimeout(() => {
-          this.agentManager.off('agent:outcome', handleOutcome);
-          this.failedTasks.add(task.id);
-          this.activeTasks.delete(task.id);
-          resolve({
-            taskId: task.id,
-            success: false,
-            agentId: agent.id,
-          });
+        const timeoutId = setTimeout(() => {
+          if (!resolved) {
+            cleanup(handleOutcome, timeoutId);
+            this.failedTasks.add(task.id);
+            this.activeTasks.delete(task.id);
+            resolve({
+              taskId: task.id,
+              success: false,
+              agentId: agent.id,
+            });
+          }
         }, 30 * 60 * 1000);
+
+        // Track the listener for potential cleanup
+        activeListeners.push({ handler: handleOutcome, timeoutId });
+
+        this.agentManager.on('agent:outcome', handleOutcome);
       });
     });
 
     const allResults = await Promise.all(completionPromises);
     results.push(...allResults);
+
+    // Final cleanup: ensure all listeners are removed (defensive)
+    for (const { handler, timeoutId } of activeListeners) {
+      this.agentManager.off('agent:outcome', handler);
+      clearTimeout(timeoutId);
+    }
 
     return results;
   }

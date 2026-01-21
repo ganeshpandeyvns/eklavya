@@ -365,6 +365,10 @@ export class TaskQueue extends EventEmitter {
         paramIndex++;
       }
 
+      // Default limit of 100 to prevent unbounded queries
+      const DEFAULT_LIMIT = 100;
+      const limit = filters?.limit || DEFAULT_LIMIT;
+
       let query = `
         SELECT
           id, project_id as "projectId", parent_task_id as "parentTaskId",
@@ -377,11 +381,9 @@ export class TaskQueue extends EventEmitter {
         FROM tasks
         WHERE ${conditions.join(' AND ')}
         ORDER BY priority DESC, created_at ASC
+        LIMIT ${limit}
       `;
 
-      if (filters?.limit) {
-        query += ` LIMIT ${filters.limit}`;
-      }
       if (filters?.offset) {
         query += ` OFFSET ${filters.offset}`;
       }

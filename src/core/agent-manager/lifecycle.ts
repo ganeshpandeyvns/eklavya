@@ -733,15 +733,13 @@ export class AgentLifecycleManager extends EventEmitter {
     const db = getDatabase();
 
     const result = await db.query<{ id: string }>(
-      `SELECT id FROM agents WHERE project_id = $1 AND status = 'idle'`,
+      `SELECT id FROM agents WHERE project_id = $1 AND status = 'idle' LIMIT 100`,
       [projectId]
     );
 
-    const results: SpawnResult[] = [];
-    for (const row of result.rows) {
-      const spawnResult = await this.spawnAgent({ agentId: row.id });
-      results.push(spawnResult);
-    }
+    // Spawn all agents in parallel for better performance
+    const spawnPromises = result.rows.map(row => this.spawnAgent({ agentId: row.id }));
+    const results = await Promise.all(spawnPromises);
 
     this.emit('bulk-spawn-complete', { projectId, count: results.length });
     return results;
@@ -753,15 +751,14 @@ export class AgentLifecycleManager extends EventEmitter {
     const result = await db.query<{ id: string }>(
       `SELECT DISTINCT a.id FROM agents a
        JOIN agent_processes ap ON a.id = ap.agent_id
-       WHERE a.project_id = $1 AND ap.status IN ('pending', 'starting', 'running')`,
+       WHERE a.project_id = $1 AND ap.status IN ('pending', 'starting', 'running')
+       LIMIT 100`,
       [projectId]
     );
 
-    const results: TerminateResult[] = [];
-    for (const row of result.rows) {
-      const termResult = await this.terminateAgent(row.id, true);
-      results.push(termResult);
-    }
+    // Terminate all agents in parallel for better performance
+    const terminatePromises = result.rows.map(row => this.terminateAgent(row.id, true));
+    const results = await Promise.all(terminatePromises);
 
     this.emit('bulk-terminate-complete', { projectId, count: results.length });
     return results;
@@ -769,27 +766,57 @@ export class AgentLifecycleManager extends EventEmitter {
 
   async garbageCollect(): Promise<number> {
     const db = getDatabase();
+    const BATCH_SIZE = 100;
+    let totalCleaned = 0;
 
-    // Find and clean up processes that have been stopped/crashed for more than 1 hour
-    const result = await db.query<{ id: string; agent_id: string }>(
-      `SELECT id, agent_id FROM agent_processes
-       WHERE status IN ('stopped', 'crashed', 'failed', 'terminated')
-       AND stopped_at < NOW() - INTERVAL '1 hour'`
-    );
+    // Process in batches to avoid overwhelming the system
+    let hasMore = true;
+    while (hasMore) {
+      // Find and clean up processes that have been stopped/crashed for more than 1 hour
+      // Use LIMIT to process in batches
+      const result = await db.query<{ id: string; agent_id: string }>(
+        `SELECT id, agent_id FROM agent_processes
+         WHERE status IN ('stopped', 'crashed', 'failed', 'terminated')
+         AND stopped_at < NOW() - INTERVAL '1 hour'
+         LIMIT $1`,
+        [BATCH_SIZE]
+      );
 
-    for (const row of result.rows) {
-      await this.terminator.cleanup(row.agent_id);
+      if (result.rows.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      // Parallelize cleanup operations within the batch
+      const cleanupPromises = result.rows.map(row => this.terminator.cleanup(row.agent_id));
+      await Promise.all(cleanupPromises);
+
+      totalCleaned += result.rows.length;
+
+      // If we got fewer than BATCH_SIZE, we're done
+      if (result.rows.length < BATCH_SIZE) {
+        hasMore = false;
+      }
     }
 
-    // Delete old records
-    await db.query(
-      `DELETE FROM agent_processes
-       WHERE status IN ('stopped', 'crashed', 'failed', 'terminated')
-       AND stopped_at < NOW() - INTERVAL '24 hours'`
-    );
+    // Delete old records in batches
+    let deletedCount = 0;
+    do {
+      const deleteResult = await db.query(
+        `DELETE FROM agent_processes
+         WHERE id IN (
+           SELECT id FROM agent_processes
+           WHERE status IN ('stopped', 'crashed', 'failed', 'terminated')
+           AND stopped_at < NOW() - INTERVAL '24 hours'
+           LIMIT $1
+         )`,
+        [BATCH_SIZE]
+      );
+      deletedCount = deleteResult.rowCount || 0;
+    } while (deletedCount >= BATCH_SIZE);
 
-    this.emit('garbage-collected', { cleanedCount: result.rows.length });
-    return result.rows.length;
+    this.emit('garbage-collected', { cleanedCount: totalCleaned });
+    return totalCleaned;
   }
 
   // ========== Aggregate Resources ==========

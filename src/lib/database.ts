@@ -4,22 +4,80 @@ import type { DatabaseConfig } from '../types/index.js';
 
 const { Pool } = pg;
 
+// Default pool size, configurable via environment variable
+const DEFAULT_POOL_SIZE = 100;
+const STATEMENT_TIMEOUT_MS = 30000; // 30 seconds
+
+export interface PoolStats {
+  totalConnections: number;
+  idleConnections: number;
+  waitingClients: number;
+}
+
 export class Database extends EventEmitter {
   private pool: pg.Pool;
   private listenerClient: pg.PoolClient | null = null;
+  private poolSize: number;
 
   constructor(config: DatabaseConfig) {
     super();
+
+    // Allow pool size configuration via environment variable or config
+    this.poolSize = parseInt(process.env.DB_POOL_SIZE || '', 10) || DEFAULT_POOL_SIZE;
+
     this.pool = new Pool({
       host: config.host,
       port: config.port,
       database: config.database,
       user: config.user,
       password: config.password,
-      max: 20,
+      max: this.poolSize,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: STATEMENT_TIMEOUT_MS,
     });
+
+    // Set up pool monitoring
+    this.setupPoolMonitoring();
+  }
+
+  /**
+   * Set up pool event monitoring for observability
+   */
+  private setupPoolMonitoring(): void {
+    this.pool.on('connect', () => {
+      this.emit('pool:connect', this.getPoolStats());
+    });
+
+    this.pool.on('acquire', () => {
+      this.emit('pool:acquire', this.getPoolStats());
+    });
+
+    this.pool.on('release', () => {
+      this.emit('pool:release', this.getPoolStats());
+    });
+
+    this.pool.on('error', (err) => {
+      this.emit('pool:error', { error: err.message, stats: this.getPoolStats() });
+    });
+  }
+
+  /**
+   * Get current pool statistics
+   */
+  getPoolStats(): PoolStats {
+    return {
+      totalConnections: this.pool.totalCount,
+      idleConnections: this.pool.idleCount,
+      waitingClients: this.pool.waitingCount,
+    };
+  }
+
+  /**
+   * Get configured pool size
+   */
+  getPoolSize(): number {
+    return this.poolSize;
   }
 
   async connect(): Promise<void> {
