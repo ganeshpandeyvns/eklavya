@@ -58,6 +58,10 @@ import { createCoordinator, AgentCoordinator } from '../core/coordination/index.
 import { getNotificationService, NotificationLevel } from '../core/notifications/index.js';
 import { getActivityService, ActivityEventType } from '../core/activity/index.js';
 import { getProgressService } from '../core/progress/index.js';
+import { getDemoService, DemoType, DemoStatus } from '../core/demos/index.js';
+import { getApprovalService, ApprovalDecision } from '../core/demos/approval.js';
+import { getVerificationService } from '../core/demos/verification.js';
+import { getFeedbackService, FeedbackSentiment, FeedbackCategory } from '../core/demos/feedback.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -209,6 +213,48 @@ export class ApiServer {
     this.route('GET', '/api/settings/notifications', this.getNotificationSettingsHandler);
     this.route('PUT', '/api/settings/notifications', this.updateNotificationSettingsHandler);
     this.route('PUT', '/api/settings/availability', this.updateAvailabilityHandler);
+
+    // Demo₇: Demo Management
+    this.route('GET', '/api/projects/:projectId/demos', this.listDemosHandler);
+    this.route('GET', '/api/demos/:demoId', this.getDemoHandler);
+    this.route('POST', '/api/projects/:projectId/demos', this.createDemoHandler);
+    this.route('PUT', '/api/demos/:demoId', this.updateDemoHandler);
+    this.route('DELETE', '/api/demos/:demoId', this.deleteDemoHandler);
+    this.route('POST', '/api/demos/:demoId/build', this.startBuildHandler);
+    this.route('POST', '/api/demos/:demoId/ready', this.markReadyHandler);
+    this.route('POST', '/api/demos/:demoId/archive', this.archiveDemoHandler);
+    this.route('POST', '/api/demos/:demoId/preview', this.setPreviewHandler);
+    this.route('DELETE', '/api/demos/:demoId/preview', this.clearPreviewHandler);
+    this.route('GET', '/api/demos/stats', this.getDemoStatsHandler);
+
+    // Demo₇: Approval Workflow
+    this.route('GET', '/api/approvals/pending', this.getPendingApprovalsHandler);
+    this.route('GET', '/api/demos/:demoId/approval', this.getDemoApprovalHandler);
+    this.route('POST', '/api/demos/:demoId/request-approval', this.requestApprovalHandler);
+    this.route('POST', '/api/approvals/:requestId/approve', this.approveDemoHandler);
+    this.route('POST', '/api/approvals/:requestId/request-changes', this.requestChangesHandler);
+    this.route('POST', '/api/approvals/:requestId/skip-to-build', this.skipToBuildHandler);
+    this.route('POST', '/api/approvals/:requestId/reject', this.rejectDemoHandler);
+    this.route('GET', '/api/demos/:demoId/approval-history', this.getApprovalHistoryHandler);
+
+    // Demo₇: Demo Verification
+    this.route('POST', '/api/demos/:demoId/verify', this.verifyDemoHandler);
+    this.route('GET', '/api/demos/:demoId/verification', this.getLatestVerificationHandler);
+    this.route('GET', '/api/demos/:demoId/verification-history', this.getVerificationHistoryHandler);
+
+    // Demo₇: Client Feedback
+    this.route('GET', '/api/demos/:demoId/feedback', this.listFeedbackHandler);
+    this.route('POST', '/api/demos/:demoId/feedback', this.addFeedbackHandler);
+    this.route('GET', '/api/feedback/:feedbackId', this.getFeedbackHandler);
+    this.route('PUT', '/api/feedback/:feedbackId', this.updateFeedbackHandler);
+    this.route('POST', '/api/feedback/:feedbackId/process', this.processFeedbackHandler);
+    this.route('POST', '/api/feedback/:feedbackId/resolve', this.resolveFeedbackHandler);
+    this.route('DELETE', '/api/feedback/:feedbackId', this.deleteFeedbackHandler);
+    this.route('GET', '/api/demos/:demoId/feedback-summary', this.getFeedbackSummaryHandler);
+
+    // Demo₇: Scaffolding
+    this.route('GET', '/api/projects/:projectId/scaffolding', this.getProjectScaffoldingHandler);
+    this.route('GET', '/api/demos/:demoId/scaffolding', this.getDemoScaffoldingHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -1229,6 +1275,605 @@ export class ApiServer {
 
       this.sendJson(res, 200, { success: true, mode: body.mode });
     } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₇: Demo Management handlers
+  private async listDemosHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const status = url.searchParams.get('status') as DemoStatus | undefined;
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+
+      const demoService = getDemoService();
+      const demos = await demoService.listDemos(projectId, { status, limit });
+
+      this.sendJson(res, 200, { success: true, demos, count: demos.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getDemoHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const demo = await demoService.getDemo(demoId);
+
+      this.sendJson(res, 200, { success: true, demo });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return this.sendJson(res, 404, { success: false, error: error.message });
+      }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async createDemoHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const body = await this.parseBody<{
+        name: string;
+        type?: DemoType;
+        description?: string;
+        config?: {
+          features?: string[];
+          excludedFeatures?: string[];
+          scaffoldingPercent?: number;
+          estimatedTime?: number;
+          estimatedCost?: number;
+        };
+      }>(req);
+
+      if (!body.name) {
+        return this.sendJson(res, 400, { success: false, error: 'name is required' });
+      }
+
+      const demoService = getDemoService();
+      const demo = await demoService.createDemo(projectId, body);
+
+      this.sendJson(res, 201, { success: true, demo });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async updateDemoHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const body = await this.parseBody<{
+        config?: {
+          features?: string[];
+          excludedFeatures?: string[];
+          scaffoldingPercent?: number;
+          estimatedTime?: number;
+          estimatedCost?: number;
+        };
+        scaffolding?: {
+          totalFiles?: number;
+          reusableFiles?: number;
+          components?: string[];
+          routes?: string[];
+          styles?: string[];
+        };
+      }>(req);
+
+      const demoService = getDemoService();
+      let demo = await demoService.getDemo(demoId);
+
+      if (body.config) {
+        demo = await demoService.updateConfig(demoId, body.config);
+      }
+      if (body.scaffolding) {
+        demo = await demoService.updateScaffolding(demoId, body.scaffolding);
+      }
+
+      this.sendJson(res, 200, { success: true, demo });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async deleteDemoHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const success = await demoService.deleteDemo(demoId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Only draft')) {
+        return this.sendJson(res, 400, { success: false, error: error.message });
+      }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async startBuildHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const success = await demoService.startBuild(demoId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async markReadyHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const success = await demoService.markReady(demoId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async archiveDemoHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const success = await demoService.archiveDemo(demoId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async setPreviewHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const body = await this.parseBody<{ url: string; port?: number; pid?: number }>(req);
+
+      if (!body.url) {
+        return this.sendJson(res, 400, { success: false, error: 'url is required' });
+      }
+
+      const demoService = getDemoService();
+      const demo = await demoService.setPreviewUrl(demoId, body.url, body.port, body.pid);
+
+      this.sendJson(res, 200, { success: true, demo });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async clearPreviewHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const demo = await demoService.clearPreview(demoId);
+
+      this.sendJson(res, 200, { success: true, demo });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getDemoStatsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const projectId = url.searchParams.get('projectId') || undefined;
+
+      const demoService = getDemoService();
+      const stats = await demoService.getStats(projectId);
+
+      this.sendJson(res, 200, { success: true, stats });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₇: Approval Workflow handlers
+  private async getPendingApprovalsHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const approvalService = getApprovalService();
+      const approvals = await approvalService.getPendingApprovals();
+
+      this.sendJson(res, 200, { success: true, approvals, count: approvals.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getDemoApprovalHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const approvalService = getApprovalService();
+      const approval = await approvalService.getLatestApprovalForDemo(demoId);
+
+      this.sendJson(res, 200, { success: true, approval });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async requestApprovalHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const body = await this.parseBody<{ requestedBy?: string }>(req);
+
+      const approvalService = getApprovalService();
+      const request = await approvalService.requestApproval(demoId, body.requestedBy);
+
+      this.sendJson(res, 201, { success: true, request });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('must be in ready')) {
+        return this.sendJson(res, 400, { success: false, error: error.message });
+      }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async approveDemoHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { requestId } = params;
+      const body = await this.parseBody<{ decidedBy: string; comments?: string }>(req);
+
+      if (!body.decidedBy) {
+        return this.sendJson(res, 400, { success: false, error: 'decidedBy is required' });
+      }
+
+      const approvalService = getApprovalService();
+      const success = await approvalService.approve(requestId, body.decidedBy, { comments: body.comments });
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async requestChangesHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { requestId } = params;
+      const body = await this.parseBody<{ decidedBy: string; comments?: string; changeRequests: string[] }>(req);
+
+      if (!body.decidedBy) {
+        return this.sendJson(res, 400, { success: false, error: 'decidedBy is required' });
+      }
+      if (!body.changeRequests || body.changeRequests.length === 0) {
+        return this.sendJson(res, 400, { success: false, error: 'changeRequests are required' });
+      }
+
+      const approvalService = getApprovalService();
+      const success = await approvalService.requestChanges(requestId, body.decidedBy, {
+        comments: body.comments,
+        changeRequests: body.changeRequests,
+      });
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async skipToBuildHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { requestId } = params;
+      const body = await this.parseBody<{ decidedBy: string; comments?: string }>(req);
+
+      if (!body.decidedBy) {
+        return this.sendJson(res, 400, { success: false, error: 'decidedBy is required' });
+      }
+
+      const approvalService = getApprovalService();
+      const success = await approvalService.skipToBuild(requestId, body.decidedBy, { comments: body.comments });
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async rejectDemoHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { requestId } = params;
+      const body = await this.parseBody<{ decidedBy: string; comments?: string }>(req);
+
+      if (!body.decidedBy) {
+        return this.sendJson(res, 400, { success: false, error: 'decidedBy is required' });
+      }
+
+      const approvalService = getApprovalService();
+      const success = await approvalService.reject(requestId, body.decidedBy, { comments: body.comments });
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getApprovalHistoryHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const approvalService = getApprovalService();
+      const history = await approvalService.getApprovalHistory(demoId);
+
+      this.sendJson(res, 200, { success: true, history, count: history.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₇: Verification handlers
+  private async verifyDemoHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const body = await this.parseBody<{
+        previewUrl?: string;
+        skipProcess?: boolean;
+        skipUrl?: boolean;
+        skipPage?: boolean;
+        skipFlow?: boolean;
+        skipResponsive?: boolean;
+        timeout?: number;
+      }>(req);
+
+      const demoService = getDemoService();
+      const demo = await demoService.getDemo(demoId);
+
+      const previewUrl = body.previewUrl || demo.previewUrl;
+      if (!previewUrl) {
+        return this.sendJson(res, 400, { success: false, error: 'previewUrl is required (either in body or set on demo)' });
+      }
+
+      const verificationService = getVerificationService();
+      const result = await verificationService.verifyDemo(demoId, previewUrl, {
+        skipProcess: body.skipProcess,
+        skipUrl: body.skipUrl,
+        skipPage: body.skipPage,
+        skipFlow: body.skipFlow,
+        skipResponsive: body.skipResponsive,
+        timeout: body.timeout,
+      });
+
+      this.sendJson(res, 200, { success: true, result });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getLatestVerificationHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const verificationService = getVerificationService();
+      const verification = await verificationService.getLatestVerification(demoId);
+
+      this.sendJson(res, 200, { success: true, verification });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getVerificationHistoryHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const verificationService = getVerificationService();
+      const history = await verificationService.getVerificationHistory(demoId);
+
+      this.sendJson(res, 200, { success: true, history, count: history.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₇: Feedback handlers
+  private async listFeedbackHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const unresolved = url.searchParams.get('unresolved') === 'true';
+      const sentiment = url.searchParams.get('sentiment') as FeedbackSentiment | undefined;
+      const category = url.searchParams.get('category') as FeedbackCategory | undefined;
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.listFeedback(demoId, { unresolved, sentiment, category, limit });
+
+      this.sendJson(res, 200, { success: true, feedback, count: feedback.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async addFeedbackHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+      const body = await this.parseBody<{
+        content: string;
+        sentiment?: FeedbackSentiment;
+        category?: FeedbackCategory;
+        pageUrl?: string;
+        elementId?: string;
+        screenshot?: string;
+      }>(req);
+
+      if (!body.content) {
+        return this.sendJson(res, 400, { success: false, error: 'content is required' });
+      }
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.addFeedback(demoId, body);
+
+      this.sendJson(res, 201, { success: true, feedback });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getFeedbackHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { feedbackId } = params;
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.getFeedback(feedbackId);
+
+      this.sendJson(res, 200, { success: true, feedback });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return this.sendJson(res, 404, { success: false, error: error.message });
+      }
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async updateFeedbackHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { feedbackId } = params;
+      const body = await this.parseBody<{
+        sentiment?: FeedbackSentiment;
+        category?: FeedbackCategory;
+        content?: string;
+        pageUrl?: string;
+        elementId?: string;
+        screenshot?: string;
+      }>(req);
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.updateFeedback(feedbackId, body);
+
+      this.sendJson(res, 200, { success: true, feedback });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async processFeedbackHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { feedbackId } = params;
+      const body = await this.parseBody<{ actionTaken: string }>(req);
+
+      if (!body.actionTaken) {
+        return this.sendJson(res, 400, { success: false, error: 'actionTaken is required' });
+      }
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.processFeedback(feedbackId, body.actionTaken);
+
+      this.sendJson(res, 200, { success: true, feedback });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async resolveFeedbackHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { feedbackId } = params;
+      const body = await this.parseBody<{ actionTaken?: string }>(req);
+
+      const feedbackService = getFeedbackService();
+      const feedback = await feedbackService.resolveFeedback(feedbackId, body.actionTaken);
+
+      this.sendJson(res, 200, { success: true, feedback });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async deleteFeedbackHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { feedbackId } = params;
+
+      const feedbackService = getFeedbackService();
+      const success = await feedbackService.deleteFeedback(feedbackId);
+
+      this.sendJson(res, 200, { success });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getFeedbackSummaryHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const feedbackService = getFeedbackService();
+      const summary = await feedbackService.getFeedbackSummary(demoId);
+
+      this.sendJson(res, 200, { success: true, summary });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Demo₇: Scaffolding handlers
+  private async getProjectScaffoldingHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { projectId } = params;
+      const db = getDatabase();
+
+      const result = await db.query<{
+        total_demos: number;
+        total_files: number;
+        reusable_files: number;
+        overall_reuse_percent: string;
+        all_components: string[];
+        all_routes: string[];
+      }>(
+        `SELECT * FROM get_project_scaffolding($1)`,
+        [projectId]
+      );
+
+      if (result.rows.length === 0 || result.rows[0].total_demos === null) {
+        return this.sendJson(res, 200, {
+          success: true,
+          scaffolding: {
+            totalDemos: 0,
+            totalFiles: 0,
+            reusableFiles: 0,
+            overallReusePercent: 0,
+            allComponents: [],
+            allRoutes: [],
+          },
+        });
+      }
+
+      const row = result.rows[0];
+      this.sendJson(res, 200, {
+        success: true,
+        scaffolding: {
+          totalDemos: row.total_demos,
+          totalFiles: row.total_files,
+          reusableFiles: row.reusable_files,
+          overallReusePercent: parseFloat(row.overall_reuse_percent || '0'),
+          allComponents: row.all_components || [],
+          allRoutes: row.all_routes || [],
+        },
+      });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  private async getDemoScaffoldingHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    try {
+      const { demoId } = params;
+
+      const demoService = getDemoService();
+      const demo = await demoService.getDemo(demoId);
+
+      this.sendJson(res, 200, { success: true, scaffolding: demo.scaffolding });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return this.sendJson(res, 404, { success: false, error: error.message });
+      }
       this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
     }
   }
