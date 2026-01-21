@@ -1,24 +1,44 @@
 {
   "name": "eklavya",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Autonomous agent orchestration platform for software development",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "eklavya": "./dist/cli/index.js"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "cli": "tsx src/cli/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "demo:6": "tsx src/scripts/run-demo6-tester.ts",
+    "demo:7": "tsx src/scripts/run-demo7-tester.ts",
+    "demo:8": "tsx src/scripts/run-demo8-tester.ts"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ganeshpandeyvns/eklavya.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "autonomous",
+    "agents",
+    "orchestration",
+    "ai",
+    "development"
+  ],
+  "author": "Ganesh Pandey",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/ganeshpandeyvns/eklavya/issues"
   },
   "homepage": "https://github.com/ganeshpandeyvns/eklavya#readme",
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
   }
 }
