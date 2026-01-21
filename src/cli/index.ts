@@ -17,6 +17,7 @@ import { logsCommand } from './commands/logs.js';
 import { configCommand } from './commands/config.js';
 import { demoCommand } from './commands/demo.js';
 import { stopCommand } from './commands/stop.js';
+import { buildCommand } from './commands/build.js';
 
 const VERSION = '1.0.0';
 
@@ -29,6 +30,11 @@ const COMMANDS: Record<string, {
     description: 'Create a new project',
     usage: 'eklavya new <name> [--description "..."] [--budget <amount>]',
     handler: newCommand,
+  },
+  build: {
+    description: 'Build a project with autonomous agents',
+    usage: 'eklavya build <project-id> [--demo-only] [--auto-approve]',
+    handler: buildCommand,
   },
   status: {
     description: 'Check project status',
@@ -97,10 +103,11 @@ function showHelp(): void {
 
   console.log(colorize('WORKFLOW:', 'bold'));
   console.log('  1. Create project:  eklavya new <name>');
-  console.log('  2. Monitor status:  eklavya status <name>');
-  console.log('  3. Review demo:     eklavya demo <name> --open');
-  console.log('  4. Approve/adjust:  eklavya approve <name>');
-  console.log('  5. Check logs:      eklavya logs <name> --follow');
+  console.log('  2. Build project:   eklavya build <name>');
+  console.log('  3. Monitor status:  eklavya status <name>');
+  console.log('  4. Review demo:     eklavya demo <name> --open');
+  console.log('  5. Approve/adjust:  eklavya approve <name>');
+  console.log('  6. Check logs:      eklavya logs <name> --follow');
   newline();
 }
 

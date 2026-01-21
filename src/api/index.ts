@@ -4,17 +4,30 @@ import { getDatabase } from '../lib/database.js';
 import type { Agent, Task, Message, Project } from '../types/index.js';
 import {
   authenticate,
+  optionalAuthenticate,
   applySecurityHeaders,
   cors,
   rateLimit,
+  smartRateLimit,
   checkBodySize,
   parseBodyWithLimit,
+  validateContentType,
+  sanitizeObject,
   getRateLimiterForMethod,
   isHeavyEndpoint,
   isAuthEndpoint,
+  authorizeEndpoint,
+  getAuthorizationAuditLog,
   RATE_LIMIT_CONFIGS,
   type AuthenticatedRequest
 } from '../middleware/index.js';
+import {
+  login,
+  refresh,
+  logout,
+  getCurrentUser,
+  changePassword
+} from './auth.js';
 import {
   getDashboardStats,
   getProjectActivity,
@@ -75,8 +88,43 @@ import { getDemoService, DemoType, DemoStatus } from '../core/demos/index.js';
 import { getApprovalService, ApprovalDecision } from '../core/demos/approval.js';
 import { getVerificationService } from '../core/demos/verification.js';
 import { getFeedbackService, FeedbackSentiment, FeedbackCategory } from '../core/demos/feedback.js';
+import {
+  getProjectCosts,
+  getProjectBudget,
+  updateProjectBudget,
+  getCostEvents,
+  getDailyCosts,
+  getCostByAgentType,
+  getCostOverview,
+  getBudgetAlerts,
+  acknowledgeBudgetAlert,
+  recordCostEvent,
+  getModelPricing,
+} from './costs.js';
+import {
+  getAggregateLearningMetrics,
+  getPromptPerformance,
+  getPromptComparison,
+  getPromptTrend,
+  listExperiments,
+  createExperiment,
+  getExperimentResults,
+  stopExperiment,
+  getAllPromptComparisons,
+} from './learning-metrics.js';
 import { getSelfBuildManager, SelfBuildConfig, SelfBuildStatus } from '../core/self-build/index.js';
 import { getAllSampleProjects, getSampleProject, createSimulatedConfig } from '../core/self-build/sample-projects.js';
+import {
+  startBuild,
+  getWorkflowState,
+  cancelWorkflow,
+  resumeWorkflow,
+  getActiveWorkflows,
+  getWorkflowStats,
+  enableAutoTrigger,
+  disableAutoTrigger,
+  getAutoTriggerStatus,
+} from './workflow.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -95,6 +143,16 @@ export class ApiServer {
   }
 
   private setupRoutes(): void {
+    // Authentication routes (no auth required)
+    this.route('POST', '/api/auth/login', this.loginHandler);
+    this.route('POST', '/api/auth/refresh', this.refreshHandler);
+    this.route('POST', '/api/auth/logout', this.logoutHandler);
+    this.route('GET', '/api/auth/me', this.getCurrentUserHandler);
+    this.route('POST', '/api/auth/change-password', this.changePasswordHandler);
+
+    // Authorization audit (admin only)
+    this.route('GET', '/api/auth/audit', this.getAuthAuditHandler);
+
     // Projects
     this.route('GET', '/api/projects', this.listProjects);
     this.route('GET', '/api/projects/:id', this.getProject);
@@ -235,7 +293,7 @@ export class ApiServer {
     this.route('POST', '/api/projects/:projectId/demos', this.createDemoHandler);
     this.route('PUT', '/api/demos/:demoId', this.updateDemoHandler);
     this.route('DELETE', '/api/demos/:demoId', this.deleteDemoHandler);
-    this.route('POST', '/api/demos/:demoId/build', this.startBuildHandler);
+    this.route('POST', '/api/demos/:demoId/build', this.startDemoBuildHandler);
     this.route('POST', '/api/demos/:demoId/ready', this.markReadyHandler);
     this.route('POST', '/api/demos/:demoId/archive', this.archiveDemoHandler);
     this.route('POST', '/api/demos/:demoId/preview', this.setPreviewHandler);
@@ -286,6 +344,41 @@ export class ApiServer {
     // Demo₈: Sample Projects
     this.route('GET', '/api/sample-projects', this.listSampleProjectsHandler);
     this.route('GET', '/api/sample-projects/:name', this.getSampleProjectHandler);
+
+    // Workflow Engine
+    this.route('POST', '/api/projects/:projectId/build', this.startBuildHandler);
+    this.route('GET', '/api/projects/:projectId/workflow', this.getWorkflowStateHandler);
+    this.route('POST', '/api/projects/:projectId/workflow/cancel', this.cancelWorkflowHandler);
+    this.route('POST', '/api/projects/:projectId/workflow/resume', this.resumeWorkflowHandler);
+    this.route('GET', '/api/workflow/active', this.getActiveWorkflowsHandler);
+    this.route('GET', '/api/workflow/stats', this.getWorkflowStatsHandler);
+    this.route('POST', '/api/workflow/auto-trigger/enable', this.enableAutoTriggerHandler);
+    this.route('POST', '/api/workflow/auto-trigger/disable', this.disableAutoTriggerHandler);
+    this.route('GET', '/api/workflow/auto-trigger/status', this.getAutoTriggerStatusHandler);
+
+    // Production: Cost Tracking
+    this.route('GET', '/api/projects/:projectId/costs', this.getProjectCostsHandler);
+    this.route('GET', '/api/projects/:projectId/budget', this.getProjectBudgetHandler);
+    this.route('PUT', '/api/projects/:projectId/budget', this.updateProjectBudgetHandler);
+    this.route('GET', '/api/projects/:projectId/cost-events', this.getCostEventsHandler);
+    this.route('GET', '/api/projects/:projectId/cost-daily', this.getDailyCostsHandler);
+    this.route('GET', '/api/projects/:projectId/cost-by-agent', this.getCostByAgentTypeHandler);
+    this.route('POST', '/api/projects/:projectId/cost-event', this.recordCostEventHandler);
+    this.route('GET', '/api/costs/overview', this.getCostOverviewHandler);
+    this.route('GET', '/api/costs/alerts', this.getBudgetAlertsHandler);
+    this.route('POST', '/api/costs/alerts/:alertId/acknowledge', this.acknowledgeBudgetAlertHandler);
+    this.route('GET', '/api/costs/pricing', this.getModelPricingHandler);
+
+    // Production: Learning Metrics
+    this.route('GET', '/api/learning/metrics', this.getLearningMetricsHandler);
+    this.route('GET', '/api/learning/prompts/:promptId', this.getPromptPerformanceHandler);
+    this.route('GET', '/api/learning/prompts/:promptId/trend', this.getPromptTrendHandler);
+    this.route('GET', '/api/learning/comparison/:agentType', this.getPromptComparisonHandler);
+    this.route('GET', '/api/learning/comparisons', this.getAllPromptComparisonsHandler);
+    this.route('GET', '/api/learning/experiments', this.listExperimentsHandler);
+    this.route('POST', '/api/learning/experiments', this.createExperimentHandler);
+    this.route('GET', '/api/learning/experiments/:experimentId', this.getExperimentResultsHandler);
+    this.route('POST', '/api/learning/experiments/:experimentId/stop', this.stopExperimentHandler);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -316,24 +409,38 @@ export class ApiServer {
         }
       }
 
-      // Apply rate limiting based on endpoint type
-      let rateLimitConfig = getRateLimiterForMethod(req.method || 'GET');
-      if (isHeavyEndpoint(url.pathname)) {
-        rateLimitConfig = RATE_LIMIT_CONFIGS.heavy;
-      } else if (isAuthEndpoint(url.pathname)) {
-        rateLimitConfig = RATE_LIMIT_CONFIGS.auth;
-      }
-
-      const rateLimitPassed = await rateLimit(req, res, rateLimitConfig);
+      // Apply smart rate limiting based on endpoint type
+      const rateLimitPassed = await smartRateLimit(req, res);
       if (!rateLimitPassed) {
         return;
       }
 
-      // Authenticate request (skips health check endpoint)
       const authReq = req as AuthenticatedRequest;
-      const authPassed = await authenticate(authReq, res);
-      if (!authPassed) {
-        return;
+
+      // Check if this is a public endpoint (no auth required)
+      const publicEndpoints = [
+        '/api/health',
+        '/api/auth/login',
+        '/api/auth/refresh'
+      ];
+
+      const isPublicEndpoint = publicEndpoints.some(ep => url.pathname === ep);
+
+      if (isPublicEndpoint) {
+        // Use optional authentication for public endpoints
+        await optionalAuthenticate(authReq);
+      } else {
+        // Authenticate request for protected endpoints
+        const authPassed = await authenticate(authReq, res);
+        if (!authPassed) {
+          return;
+        }
+
+        // Check endpoint-level authorization
+        const authzPassed = await authorizeEndpoint(authReq, res);
+        if (!authzPassed) {
+          return;
+        }
       }
 
       const methodRoutes = this.routes.get(req.method || 'GET');
@@ -1479,7 +1586,7 @@ export class ApiServer {
     }
   }
 
-  private async startBuildHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+  private async startDemoBuildHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
     try {
       const { demoId } = params;
 
@@ -2164,6 +2271,175 @@ export class ApiServer {
     } catch (error) {
       this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
     }
+  }
+
+  // Workflow Engine handlers
+  private async startBuildHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await startBuild(req, res, params.projectId);
+  }
+
+  private async getWorkflowStateHandler(_req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getWorkflowState(_req, res, params.projectId);
+  }
+
+  private async cancelWorkflowHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await cancelWorkflow(req, res, params.projectId);
+  }
+
+  private async resumeWorkflowHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await resumeWorkflow(req, res, params.projectId);
+  }
+
+  private async getActiveWorkflowsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getActiveWorkflows(req, res);
+  }
+
+  private async getWorkflowStatsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getWorkflowStats(req, res);
+  }
+
+  private async enableAutoTriggerHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await enableAutoTrigger(req, res);
+  }
+
+  private async disableAutoTriggerHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await disableAutoTrigger(req, res);
+  }
+
+  private async getAutoTriggerStatusHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getAutoTriggerStatus(req, res);
+  }
+
+  // Authentication handlers
+  private async loginHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await login(req, res);
+  }
+
+  private async refreshHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await refresh(req, res);
+  }
+
+  private async logoutHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await logout(req as AuthenticatedRequest, res);
+  }
+
+  private async getCurrentUserHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getCurrentUser(req as AuthenticatedRequest, res);
+  }
+
+  private async changePasswordHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await changePassword(req as AuthenticatedRequest, res);
+  }
+
+  private async getAuthAuditHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+
+      // Only admins can view audit log
+      if (!authReq.user || authReq.user.role !== 'admin') {
+        this.sendJson(res, 403, { success: false, error: 'Admin access required' });
+        return;
+      }
+
+      const url = new URL(req.url || '/', `http://${req.headers.host}`);
+      const userId = url.searchParams.get('userId') || undefined;
+      const resource = url.searchParams.get('resource') || undefined;
+      const allowed = url.searchParams.get('allowed');
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+
+      const auditLog = getAuthorizationAuditLog({
+        userId,
+        resource,
+        allowed: allowed !== null ? allowed === 'true' : undefined,
+        limit,
+      });
+
+      this.sendJson(res, 200, { success: true, entries: auditLog, count: auditLog.length });
+    } catch (error) {
+      this.sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  // Cost Tracking handlers
+  private async getProjectCostsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getProjectCosts(req, res, params);
+  }
+
+  private async getProjectBudgetHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getProjectBudget(req, res, params);
+  }
+
+  private async updateProjectBudgetHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await updateProjectBudget(req, res, params);
+  }
+
+  private async getCostEventsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getCostEvents(req, res, params);
+  }
+
+  private async getDailyCostsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getDailyCosts(req, res, params);
+  }
+
+  private async getCostByAgentTypeHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getCostByAgentType(req, res, params);
+  }
+
+  private async recordCostEventHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await recordCostEvent(req, res, params);
+  }
+
+  private async getCostOverviewHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getCostOverview(req, res);
+  }
+
+  private async getBudgetAlertsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getBudgetAlerts(req, res);
+  }
+
+  private async acknowledgeBudgetAlertHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await acknowledgeBudgetAlert(req, res, params);
+  }
+
+  private async getModelPricingHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getModelPricing(req, res);
+  }
+
+  // Learning Metrics handlers
+  private async getLearningMetricsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getAggregateLearningMetrics(req, res);
+  }
+
+  private async getPromptPerformanceHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getPromptPerformance(req, res, params);
+  }
+
+  private async getPromptTrendHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getPromptTrend(req, res, params);
+  }
+
+  private async getPromptComparisonHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getPromptComparison(req, res, params);
+  }
+
+  private async getAllPromptComparisonsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getAllPromptComparisons(req, res);
+  }
+
+  private async listExperimentsHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await listExperiments(req, res);
+  }
+
+  private async createExperimentHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await createExperiment(req, res);
+  }
+
+  private async getExperimentResultsHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getExperimentResults(req, res, params);
+  }
+
+  private async stopExperimentHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await stopExperiment(req, res, params);
   }
 
   start(port: number, host = '0.0.0.0'): Promise<void> {
