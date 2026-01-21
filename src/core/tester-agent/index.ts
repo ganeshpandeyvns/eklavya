@@ -364,7 +364,7 @@ export class TesterAgent extends EventEmitter {
         const start = Date.now();
         try {
           const response = await fetch(`${this.apiUrl}/api/health`);
-          const data = await response.json();
+          const data = await response.json() as { status?: string };
           return {
             name: 'Health endpoint responds',
             type: 'api' as const,

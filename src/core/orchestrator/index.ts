@@ -251,7 +251,10 @@ export class Orchestrator extends EventEmitter {
         description: taskDef.description,
         type: taskDef.type,
         status: 'pending',
-        priority: taskDef.priority || 0,
+        priority: taskDef.priority || 5,
+        acceptanceCriteria: [],
+        retryCount: 0,
+        maxRetries: 3,
         createdAt: new Date(),
         updatedAt: new Date(),
       };

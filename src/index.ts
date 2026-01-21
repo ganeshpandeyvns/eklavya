@@ -5,6 +5,7 @@ import { createAgentManager } from './core/agent-manager/index.js';
 import { getLearningSystem } from './core/learning/index.js';
 import { getCheckpointManager } from './core/checkpoint/index.js';
 import { createApiServer } from './api/index.js';
+import { getWebSocketService } from './services/websocket.js';
 import type { EklavyaConfig } from './types/index.js';
 
 dotenv.config();
@@ -45,6 +46,11 @@ async function main() {
   await api.start(4000);
   console.log('✓ API server started on port 4000');
 
+  // Initialize WebSocket server for real-time updates
+  const wsService = getWebSocketService({ port: 4001 });
+  await wsService.start();
+  console.log('✓ WebSocket server started on port 4001');
+
   // Initialize learning system
   getLearningSystem({ explorationRate: 0.1, candidateRate: 0.3 });
   console.log('✓ Learning system initialized');
@@ -55,11 +61,13 @@ async function main() {
 
   console.log('\nEklavya Core is running!');
   console.log('API: http://localhost:4000');
+  console.log('WebSocket: ws://localhost:4001');
   console.log('\nPress Ctrl+C to stop\n');
 
   // Handle shutdown
   process.on('SIGINT', async () => {
     console.log('\nShutting down...');
+    await wsService.stop();
     await api.stop();
     await db.close();
     process.exit(0);

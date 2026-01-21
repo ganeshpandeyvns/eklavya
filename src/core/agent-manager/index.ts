@@ -228,7 +228,6 @@ export class AgentManager extends EventEmitter {
         reward,
         context: {
           agentType: agent.type,
-          executionTimeMs: executionTime,
           ...outcome.metrics,
           ...outcome.context,
         },
@@ -332,16 +331,20 @@ export class AgentManager extends EventEmitter {
 
       if (entry) {
         // Record outcome with RL feedback
+        const defaultMetrics = {
+          tasksCompleted: success ? 1 : 0,
+          tasksFailed: success ? 0 : 1,
+          tokensUsed: 0,
+          executionTimeMs: Date.now() - entry.startTime,
+        };
         await this.recordAgentOutcome({
           agentId: agent.id,
           promptId: agent.promptId || '',
           success,
           taskId: agent.currentTaskId,
-          metrics: entry.agent.metrics || {
-            tasksCompleted: success ? 1 : 0,
-            tasksFailed: success ? 0 : 1,
-            tokensUsed: 0,
-            executionTimeMs: Date.now() - entry.startTime,
+          metrics: {
+            ...defaultMetrics,
+            ...(entry.agent.metrics || {}),
           },
           context: { exitCode: code },
         });

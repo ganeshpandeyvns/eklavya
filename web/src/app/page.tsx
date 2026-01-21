@@ -1,40 +1,210 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
-import { Plus, Upload, ArrowRight } from "lucide-react";
+import { Plus, Upload, ArrowRight, Wifi, WifiOff, Loader2 } from "lucide-react";
 import { WelcomeMessage } from "@/components/dashboard/WelcomeMessage";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { AgentGrid } from "@/components/dashboard/AgentGrid";
-import {
-  mockProjects,
-  mockStats,
-  mockActivity,
-  mockAgents,
-} from "@/data/mock";
+import { useDashboardStats, useProjects, useProjectActivity, useLiveAgents, ActivityItem as ApiActivityItem, LiveAgent } from "@/hooks/useApi";
+import { useWebSocket, useAgentUpdates, useActivityUpdates } from "@/hooks/useWebSocket";
+import type { Project, Agent, ActivityItem, DashboardStats } from "@/types";
+
+// API project response type
+interface ApiProject {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+  tokens_used?: number;
+  cost_used?: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+// Transform API project to frontend Project type
+function transformProject(apiProject: ApiProject): Project {
+  return {
+    id: apiProject.id,
+    name: apiProject.name,
+    clientName: "Client",
+    description: apiProject.description || "",
+    status: (apiProject.status as Project["status"]) || "planning",
+    progress: 0,
+    currentPhase: "development",
+    budgetLimit: 100,
+    budgetSpent: apiProject.cost_used || 0,
+    createdAt: new Date(apiProject.created_at),
+    updatedAt: apiProject.updated_at ? new Date(apiProject.updated_at) : new Date(apiProject.created_at),
+    demoNumber: 0,
+  };
+}
+
+// Transform LiveAgent to frontend Agent type
+function transformLiveAgent(liveAgent: LiveAgent): Agent {
+  return {
+    id: liveAgent.id,
+    projectId: "",
+    type: liveAgent.type as Agent["type"],
+    status: (liveAgent.status as Agent["status"]) || "idle",
+    currentTask: liveAgent.currentTask || undefined,
+    progress: liveAgent.progress || 0,
+    lastActivity: liveAgent.lastActivity ? new Date(liveAgent.lastActivity) : new Date(),
+  };
+}
+
+// Transform API agent update to frontend Agent type
+function transformAgentUpdate(update: {
+  id: string;
+  projectId: string;
+  type: string;
+  status: string;
+  currentTask?: string;
+  progress?: number;
+}): Agent {
+  return {
+    id: update.id,
+    projectId: update.projectId || "",
+    type: update.type as Agent["type"],
+    status: (update.status as Agent["status"]) || "idle",
+    currentTask: update.currentTask || undefined,
+    progress: update.progress || 0,
+    lastActivity: new Date(),
+  };
+}
+
+// Transform API activity to frontend ActivityItem type
+function transformApiActivity(apiActivity: ApiActivityItem): ActivityItem {
+  return {
+    id: apiActivity.id,
+    projectId: apiActivity.projectId,
+    agentType: apiActivity.agentType as ActivityItem["agentType"],
+    action: apiActivity.action,
+    details: apiActivity.details,
+    timestamp: new Date(apiActivity.timestamp),
+  };
+}
+
+// Transform activity update to frontend ActivityItem type
+function transformActivityUpdate(activity: {
+  id: string;
+  projectId: string;
+  agentType: string;
+  action: string;
+  details?: string;
+}): ActivityItem {
+  return {
+    id: activity.id,
+    projectId: activity.projectId,
+    agentType: activity.agentType as ActivityItem["agentType"],
+    action: activity.action,
+    details: activity.details,
+    timestamp: new Date(),
+  };
+}
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"all" | "attention" | "progress" | "completed">("all");
+  const [localAgents, setLocalAgents] = useState<Agent[]>([]);
+  const [localActivities, setLocalActivities] = useState<ActivityItem[]>([]);
 
-  const needsAttention = mockProjects.filter((p) => p.status === "demo_ready");
-  const inProgress = mockProjects.filter(
+  // WebSocket connection
+  const { status: wsStatus, isConnected } = useWebSocket({
+    autoConnect: true,
+    channels: ["agents", "tasks", "activity", "learning"],
+  });
+
+  // API data fetching
+  const { stats, loading: statsLoading, error: statsError } = useDashboardStats();
+  const { projects: apiProjects, loading: projectsLoading, error: projectsError } = useProjects();
+
+  // Get first project ID for activity and agents (in real app, this would be selected project)
+  const firstProjectId = apiProjects && apiProjects.length > 0 ? apiProjects[0].id : null;
+
+  const { activities: apiActivities } = useProjectActivity(firstProjectId);
+  const { agents: apiAgents } = useLiveAgents(firstProjectId);
+
+  // Transform API data
+  const projects: Project[] = apiProjects?.map(transformProject) || [];
+  const agents: Agent[] = apiAgents?.map(transformLiveAgent) || localAgents;
+  const activities: ActivityItem[] = apiActivities?.map(transformApiActivity) || localActivities;
+
+  // Real-time agent updates
+  useAgentUpdates(firstProjectId, useCallback((update) => {
+    setLocalAgents((prev) => {
+      const existing = prev.findIndex((a) => a.id === update.id);
+      const newAgent = transformAgentUpdate(update);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = newAgent;
+        return updated;
+      }
+      return [...prev, newAgent];
+    });
+  }, []));
+
+  // Real-time activity updates
+  useActivityUpdates(firstProjectId, useCallback((activity) => {
+    setLocalActivities((prev) => [
+      transformActivityUpdate(activity),
+      ...prev.slice(0, 49), // Keep last 50
+    ]);
+  }, []));
+
+  // Filter projects by status
+  const needsAttention = projects.filter((p) => p.status === "demo_ready");
+  const inProgress = projects.filter(
     (p) => p.status === "demo_building" || p.status === "building" || p.status === "planning"
   );
-  const completed = mockProjects.filter((p) => p.status === "completed");
+  const completed = projects.filter((p) => p.status === "completed");
 
   const filteredProjects = {
-    all: mockProjects,
+    all: projects,
     attention: needsAttention,
     progress: inProgress,
     completed: completed,
   };
 
-  const workingAgents = mockAgents.filter((a) => a.status === "working" || a.status === "idle");
+  const workingAgents = agents.filter((a) => a.status === "working" || a.status === "idle");
+
+  // Default stats when loading
+  const displayStats: DashboardStats = stats || {
+    activeProjects: projects.length,
+    activeAgents: workingAgents.length,
+    demosWaitingReview: needsAttention.length,
+    todaySpend: 0,
+  };
+
+  const isLoading = statsLoading || projectsLoading;
+  const hasError = statsError || projectsError;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 animate-in">
+      {/* Connection status indicator */}
+      <div className="flex items-center justify-end gap-2 text-sm">
+        {isConnected ? (
+          <span className="flex items-center gap-1 text-green-600">
+            <Wifi className="h-4 w-4" />
+            Live
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-gray-400">
+            <WifiOff className="h-4 w-4" />
+            {wsStatus === "connecting" || wsStatus === "reconnecting" ? "Connecting..." : "Offline"}
+          </span>
+        )}
+      </div>
+
+      {/* Error banner */}
+      {hasError && (
+        <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-red-700">
+          <p className="font-medium">Failed to load dashboard data</p>
+          <p className="text-sm">{(statsError || projectsError)?.message}</p>
+        </div>
+      )}
+
       {/* Welcome message */}
       <WelcomeMessage
         name="Ganesh"
@@ -43,12 +213,18 @@ export default function DashboardPage() {
           buildsComplete: completed.filter(
             (p) => p.updatedAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
           ).length,
-          totalSpent: mockStats.todaySpend,
+          totalSpent: displayStats.todaySpend,
         }}
       />
 
       {/* Stats */}
-      <StatsCards stats={mockStats} />
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+        </div>
+      ) : (
+        <StatsCards stats={displayStats} />
+      )}
 
       {/* Quick actions */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -92,7 +268,7 @@ export default function DashboardPage() {
           {/* Tabs */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2">
             {[
-              { key: "all", label: "All Projects", count: mockProjects.length },
+              { key: "all", label: "All Projects", count: projects.length },
               {
                 key: "attention",
                 label: "Needs Attention",
@@ -128,16 +304,28 @@ export default function DashboardPage() {
           </div>
 
           {/* Project cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {filteredProjects[activeTab].map((project) => (
-              <ProjectCard key={project.id} project={project} />
-            ))}
-          </div>
-
-          {filteredProjects[activeTab].length === 0 && (
-            <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
-              <p className="text-gray-500">No projects in this category</p>
+          {projectsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
             </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {filteredProjects[activeTab].map((project) => (
+                  <ProjectCard key={project.id} project={project} />
+                ))}
+              </div>
+
+              {filteredProjects[activeTab].length === 0 && (
+                <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+                  <p className="text-gray-500">
+                    {projects.length === 0
+                      ? "No projects yet. Create your first project!"
+                      : "No projects in this category"}
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -147,7 +335,7 @@ export default function DashboardPage() {
           <AgentGrid agents={workingAgents} />
 
           {/* Activity feed */}
-          <ActivityFeed activities={mockActivity} />
+          <ActivityFeed activities={activities} />
         </div>
       </div>
     </div>

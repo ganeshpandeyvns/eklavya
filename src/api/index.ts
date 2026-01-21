@@ -2,6 +2,14 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { URL } from 'url';
 import { getDatabase } from '../lib/database.js';
 import type { Agent, Task, Message, Project } from '../types/index.js';
+import {
+  getDashboardStats,
+  getProjectActivity,
+  getAgentStats,
+  getProjectAgentsLive,
+  getPromptStats,
+  getProjectTimeline,
+} from './dashboard.js';
 
 export interface ApiServerOptions {
   port: number;
@@ -43,6 +51,14 @@ export class ApiServer {
 
     // Health
     this.route('GET', '/api/health', this.healthCheck);
+
+    // Dashboard endpoints
+    this.route('GET', '/api/dashboard/stats', this.getDashboardStats);
+    this.route('GET', '/api/projects/:projectId/activity', this.getProjectActivity);
+    this.route('GET', '/api/agents/:agentId/stats', this.getAgentStats);
+    this.route('GET', '/api/projects/:projectId/agents/live', this.getProjectAgentsLive);
+    this.route('GET', '/api/prompts/:agentType/stats', this.getPromptStats);
+    this.route('GET', '/api/projects/:projectId/timeline', this.getProjectTimeline);
   }
 
   private route(method: string, path: string, handler: RouteHandler): void {
@@ -270,6 +286,31 @@ export class ApiServer {
       [params.projectId, body.type, body.toAgentId || null, JSON.stringify(body.payload)]
     );
     this.sendJson(res, 201, result.rows[0]);
+  }
+
+  // Dashboard route handlers
+  private async getDashboardStats(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    await getDashboardStats(req, res);
+  }
+
+  private async getProjectActivity(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getProjectActivity(req, res, params.projectId);
+  }
+
+  private async getAgentStats(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getAgentStats(req, res, params.agentId);
+  }
+
+  private async getProjectAgentsLive(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getProjectAgentsLive(req, res, params.projectId);
+  }
+
+  private async getPromptStats(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getPromptStats(req, res, params.agentType);
+  }
+
+  private async getProjectTimeline(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+    await getProjectTimeline(req, res, params.projectId);
   }
 
   start(port: number, host = '0.0.0.0'): Promise<void> {

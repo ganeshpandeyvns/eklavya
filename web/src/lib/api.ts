@@ -45,6 +45,77 @@ export interface Message {
   created_at: string;
 }
 
+export interface DashboardStats {
+  activeProjects: number;
+  activeAgents: number;
+  demosWaitingReview: number;
+  todaySpend: number;
+  totalTasks: number;
+  completedTasks: number;
+  totalBugs: number;
+  openBugs: number;
+}
+
+export interface ActivityItem {
+  id: string;
+  projectId: string;
+  agentType: string;
+  agentId?: string;
+  action: string;
+  details?: string;
+  timestamp: string;
+}
+
+export interface AgentStats {
+  id: string;
+  type: string;
+  status: string;
+  tasksCompleted: number;
+  tasksFailed: number;
+  tokensUsed: number;
+  avgReward: number;
+  totalOutcomes: number;
+  successRate: number;
+  thompsonScore: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LiveAgent {
+  id: string;
+  type: string;
+  status: string;
+  currentTask: string | null;
+  progress: number;
+  tasksCompleted: number;
+  tasksFailed: number;
+  tokensUsed: number;
+  isHealthy: boolean;
+  lastActivity: string;
+}
+
+export interface PromptVersion {
+  id: string;
+  version: number;
+  status: string;
+  alpha: number;
+  beta: number;
+  thompsonScore: number;
+  totalUses: number;
+  successfulUses: number;
+  successRate: number;
+  createdAt: string;
+}
+
+export interface PromptStats {
+  agentType: string;
+  totalVersions: number;
+  totalUses: number;
+  avgThompsonScore: number;
+  productionVersion: number | null;
+  versions: PromptVersion[];
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -124,6 +195,36 @@ class ApiClient {
   // Health
   async health(): Promise<{ status: string }> {
     return this.fetch('/api/health');
+  }
+
+  // Dashboard
+  async getDashboardStats(): Promise<DashboardStats> {
+    return this.fetch('/api/dashboard/stats');
+  }
+
+  async getProjectActivity(projectId: string): Promise<ActivityItem[]> {
+    return this.fetch(`/api/projects/${projectId}/activity`);
+  }
+
+  async getAgentStats(agentId: string): Promise<AgentStats> {
+    return this.fetch(`/api/agents/${agentId}/stats`);
+  }
+
+  async getLiveAgents(projectId: string): Promise<LiveAgent[]> {
+    return this.fetch(`/api/projects/${projectId}/agents/live`);
+  }
+
+  async getPromptStats(agentType: string): Promise<PromptStats> {
+    return this.fetch(`/api/prompts/${agentType}/stats`);
+  }
+
+  async getProjectTimeline(projectId: string): Promise<{
+    project: { id: string; name: string; status: string; startedAt: string; lastActivity: string };
+    tasks: Array<{ id: string; title: string; status: string; createdAt: string; startedAt?: string; completedAt?: string; duration?: number }>;
+    agents: Array<{ id: string; type: string; status: string; spawnedAt: string; lastActivity: string }>;
+    stats: { totalTasks: number; completedTasks: number; totalAgents: number; activeAgents: number };
+  }> {
+    return this.fetch(`/api/projects/${projectId}/timeline`);
   }
 }
 
