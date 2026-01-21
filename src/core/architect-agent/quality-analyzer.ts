@@ -437,7 +437,13 @@ export class QualityAnalyzer {
 
   private async checkErrorHandling(): Promise<void> {
     for (const fm of this.fileMetrics) {
-      if (!fm.hasErrorHandling && fm.functions > 3) {
+      // Skip test files - they use assertions for error checking
+      const isTestFile = fm.file.includes('.test.') ||
+                         fm.file.includes('.spec.') ||
+                         fm.file.includes('/tests/') ||
+                         fm.file.includes('/__tests__/');
+
+      if (!isTestFile && !fm.hasErrorHandling && fm.functions > 3) {
         this.issues.push({
           id: `no-error-handling-${Date.now()}-${Math.random()}`,
           severity: 'medium',
@@ -498,9 +504,18 @@ export class QualityAnalyzer {
   }
 
   private calculateErrorHandlingCoverage(): number {
-    if (this.fileMetrics.length === 0) return 0;
-    const filesWithErrorHandling = this.fileMetrics.filter(f => f.hasErrorHandling).length;
-    return (filesWithErrorHandling / this.fileMetrics.length) * 100;
+    // Exclude test files from error handling coverage calculation
+    const nonTestFiles = this.fileMetrics.filter(f => {
+      const isTestFile = f.file.includes('.test.') ||
+                         f.file.includes('.spec.') ||
+                         f.file.includes('/tests/') ||
+                         f.file.includes('/__tests__/');
+      return !isTestFile;
+    });
+
+    if (nonTestFiles.length === 0) return 100;
+    const filesWithErrorHandling = nonTestFiles.filter(f => f.hasErrorHandling).length;
+    return (filesWithErrorHandling / nonTestFiles.length) * 100;
   }
 
   private calculateSecurityScore(): number {

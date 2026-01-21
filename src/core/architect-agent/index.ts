@@ -169,114 +169,128 @@ export class ArchitectAgent extends EventEmitter {
    * Initialize the architect agent and select prompt via Thompson Sampling
    */
   async initialize(): Promise<void> {
-    const db = getDatabase();
-    const learningSystem = getLearningSystem();
+    try {
+      const db = getDatabase();
+      const learningSystem = getLearningSystem();
 
-    // Select architect prompt using Thompson Sampling
-    const selectedPrompt = await learningSystem.selectPrompt('architect');
-    this.promptId = selectedPrompt?.id;
+      // Select architect prompt using Thompson Sampling
+      const selectedPrompt = await learningSystem.selectPrompt('architect');
+      this.promptId = selectedPrompt?.id;
 
-    // Create architect agent record
-    await db.query(
-      `INSERT INTO agents (id, project_id, type, status, prompt_id, created_at, updated_at)
-       VALUES ($1, $2, 'architect', 'working', $3, NOW(), NOW())`,
-      [this.agentId, this.config.projectId, this.promptId]
-    );
+      // Create architect agent record
+      await db.query(
+        `INSERT INTO agents (id, project_id, type, status, prompt_id, created_at, updated_at)
+         VALUES ($1, $2, 'architect', 'working', $3, NOW(), NOW())`,
+        [this.agentId, this.config.projectId, this.promptId]
+      );
 
-    this.startTime = Date.now();
+      this.startTime = Date.now();
 
-    this.emit('initialized', {
-      agentId: this.agentId,
-      promptId: this.promptId,
-      milestone: this.config.milestone,
-    });
+      this.emit('initialized', {
+        agentId: this.agentId,
+        promptId: this.promptId,
+        milestone: this.config.milestone,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to initialize architect agent:`, errorMessage);
+      this.emit('error', { phase: 'initialize', error: errorMessage });
+      throw error;
+    }
   }
 
   /**
    * Run comprehensive architecture review
    */
   async runReview(): Promise<ArchitectReviewResult> {
-    this.emit('review:started', { milestone: this.config.milestone });
+    try {
+      this.emit('review:started', { milestone: this.config.milestone });
 
-    console.log('\n' + '═'.repeat(70));
-    console.log('  SENIOR ARCHITECT REVIEW');
-    console.log('  Milestone: ' + this.config.milestone);
-    console.log('═'.repeat(70));
+      console.log('\n' + '═'.repeat(70));
+      console.log('  SENIOR ARCHITECT REVIEW');
+      console.log('  Milestone: ' + this.config.milestone);
+      console.log('═'.repeat(70));
 
-    // Phase 1: Requirements Analysis
-    console.log('\n📋 Phase 1: Requirements Analysis...');
-    this.emit('phase:started', { phase: 'requirements' });
-    const requirementsReport = await this.requirementsMapper.analyze();
-    this.emit('phase:completed', { phase: 'requirements', report: requirementsReport });
+      // Phase 1: Requirements Analysis
+      console.log('\n📋 Phase 1: Requirements Analysis...');
+      this.emit('phase:started', { phase: 'requirements' });
+      const requirementsReport = await this.requirementsMapper.analyze();
+      this.emit('phase:completed', { phase: 'requirements', report: requirementsReport });
 
-    // Phase 2: Code Quality Analysis
-    console.log('\n🔍 Phase 2: Code Quality Analysis...');
-    this.emit('phase:started', { phase: 'quality' });
-    const qualityReport = await this.qualityAnalyzer.analyze();
-    this.emit('phase:completed', { phase: 'quality', report: qualityReport });
+      // Phase 2: Code Quality Analysis
+      console.log('\n🔍 Phase 2: Code Quality Analysis...');
+      this.emit('phase:started', { phase: 'quality' });
+      const qualityReport = await this.qualityAnalyzer.analyze();
+      this.emit('phase:completed', { phase: 'quality', report: qualityReport });
 
-    // Phase 3: Test Coverage Analysis
-    console.log('\n🧪 Phase 3: Test Coverage Analysis...');
-    this.emit('phase:started', { phase: 'coverage' });
-    const coverageReport = await this.coverageAnalyzer.analyze();
-    this.emit('phase:completed', { phase: 'coverage', report: coverageReport });
+      // Phase 3: Test Coverage Analysis
+      console.log('\n🧪 Phase 3: Test Coverage Analysis...');
+      this.emit('phase:started', { phase: 'coverage' });
+      const coverageReport = await this.coverageAnalyzer.analyze();
+      this.emit('phase:completed', { phase: 'coverage', report: coverageReport });
 
-    // Phase 4: Evaluate against success criteria
-    console.log('\n📊 Phase 4: Evaluating Success Criteria...');
-    const criteriaResults = this.evaluateCriteria(
-      requirementsReport,
-      qualityReport,
-      coverageReport
-    );
+      // Phase 4: Evaluate against success criteria
+      console.log('\n📊 Phase 4: Evaluating Success Criteria...');
+      const criteriaResults = this.evaluateCriteria(
+        requirementsReport,
+        qualityReport,
+        coverageReport
+      );
 
-    // Phase 5: Calculate overall score and grade
-    const { score, grade, overallPass } = this.calculateOverallScore(criteriaResults);
+      // Phase 5: Calculate overall score and grade
+      const { score, grade, overallPass } = this.calculateOverallScore(criteriaResults);
 
-    // Phase 6: Generate fix recommendations
-    const { criticalFixes, recommendedFixes } = this.generateFixes(
-      requirementsReport,
-      qualityReport,
-      coverageReport
-    );
+      // Phase 6: Generate fix recommendations
+      const { criticalFixes, recommendedFixes } = this.generateFixes(
+        requirementsReport,
+        qualityReport,
+        coverageReport
+      );
 
-    // Phase 7: Apply RL rewards/penalties
-    console.log('\n🎯 Phase 5: Applying RL Feedback...');
-    const rewardsApplied = await this.applyRLFeedback(
-      qualityReport,
-      requirementsReport,
-      coverageReport,
-      score
-    );
+      // Phase 7: Apply RL rewards/penalties
+      console.log('\n🎯 Phase 5: Applying RL Feedback...');
+      const rewardsApplied = await this.applyRLFeedback(
+        qualityReport,
+        requirementsReport,
+        coverageReport,
+        score
+      );
 
-    const duration = Date.now() - this.startTime;
+      const duration = Date.now() - this.startTime;
 
-    const result: ArchitectReviewResult = {
-      id: uuidv4(),
-      projectId: this.config.projectId,
-      milestone: this.config.milestone,
-      timestamp: new Date(),
-      duration,
-      criteria: criteriaResults,
-      qualityReport,
-      requirementsReport,
-      coverageReport,
-      overallPass,
-      score,
-      grade,
-      criticalFixes,
-      recommendedFixes,
-      rewardsApplied,
-    };
+      const result: ArchitectReviewResult = {
+        id: uuidv4(),
+        projectId: this.config.projectId,
+        milestone: this.config.milestone,
+        timestamp: new Date(),
+        duration,
+        criteria: criteriaResults,
+        qualityReport,
+        requirementsReport,
+        coverageReport,
+        overallPass,
+        score,
+        grade,
+        criticalFixes,
+        recommendedFixes,
+        rewardsApplied,
+      };
 
-    // Record architect outcome
-    await this.recordOutcome(result);
+      // Record architect outcome
+      await this.recordOutcome(result);
 
-    // Print summary
-    this.printSummary(result);
+      // Print summary
+      this.printSummary(result);
 
-    this.emit('review:completed', result);
+      this.emit('review:completed', result);
 
-    return result;
+      return result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Architect review failed:`, errorMessage);
+      this.emit('review:error', { milestone: this.config.milestone, error: errorMessage });
+      throw error;
+    }
   }
 
   /**
@@ -463,105 +477,110 @@ export class ArchitectAgent extends EventEmitter {
     coverage: CoverageReport,
     overallScore: number
   ): Promise<ArchitectReviewResult['rewardsApplied']> {
-    const learningSystem = getLearningSystem();
-    const db = getDatabase();
-    const rewardsApplied: ArchitectReviewResult['rewardsApplied'] = [];
+    try {
+      const learningSystem = getLearningSystem();
+      const db = getDatabase();
+      const rewardsApplied: ArchitectReviewResult['rewardsApplied'] = [];
 
-    const criticalIssueCount = getCriticalIssueCount(quality);
-    const lineCoverage = getLineCoverage(coverage);
+      const criticalIssueCount = getCriticalIssueCount(quality);
+      const lineCoverage = getLineCoverage(coverage);
 
-    // Get all agents that contributed to this milestone
-    const agentsResult = await db.query<{
-      id: string;
-      type: AgentType;
-      prompt_id: string;
-      tasks_completed: number;
-      tasks_failed: number;
-    }>(
-      `SELECT a.id, a.type, a.prompt_id, a.tasks_completed, a.tasks_failed
-       FROM agents a
-       WHERE a.project_id = $1 AND a.prompt_id IS NOT NULL`,
-      [this.config.projectId]
-    );
+      // Get all agents that contributed to this milestone
+      const agentsResult = await db.query<{
+        id: string;
+        type: AgentType;
+        prompt_id: string;
+        tasks_completed: number;
+        tasks_failed: number;
+      }>(
+        `SELECT a.id, a.type, a.prompt_id, a.tasks_completed, a.tasks_failed
+         FROM agents a
+         WHERE a.project_id = $1 AND a.prompt_id IS NOT NULL`,
+        [this.config.projectId]
+      );
 
-    // Calculate rewards for each agent type based on their contribution
-    const _agentTypeScores = new Map<AgentType, { total: number; count: number }>();
+      // Calculate rewards for each agent type based on their contribution
+      const _agentTypeScores = new Map<AgentType, { total: number; count: number }>();
 
-    for (const agent of agentsResult.rows) {
-      const agentType = agent.type;
-      let reward = 0;
-      let reason = '';
+      for (const agent of agentsResult.rows) {
+        const agentType = agent.type;
+        let reward = 0;
+        let reason = '';
 
-      // Base reward from overall score
-      const baseReward = (overallScore - 70) / 100;  // -0.3 to +0.3
+        // Base reward from overall score
+        const baseReward = (overallScore - 70) / 100;  // -0.3 to +0.3
 
-      switch (agentType) {
-        case 'developer':
-          // Developers are rewarded/penalized based on code quality
-          const qualityBonus = (quality.overallScore - 70) / 100;  // -0.3 to +0.3
-          const bugPenalty = -0.1 * criticalIssueCount;
-          reward = baseReward + qualityBonus + bugPenalty;
-          reason = `Quality: ${quality.overallScore}%, Critical issues: ${criticalIssueCount}`;
-          break;
+        switch (agentType) {
+          case 'developer':
+            // Developers are rewarded/penalized based on code quality
+            const qualityBonus = (quality.overallScore - 70) / 100;  // -0.3 to +0.3
+            const bugPenalty = -0.1 * criticalIssueCount;
+            reward = baseReward + qualityBonus + bugPenalty;
+            reason = `Quality: ${quality.overallScore}%, Critical issues: ${criticalIssueCount}`;
+            break;
 
-        case 'tester':
-          // Testers are rewarded based on test coverage
-          const coverageBonus = (lineCoverage - 50) / 100;  // -0.2 to +0.5
-          reward = baseReward + coverageBonus;
-          reason = `Test coverage: ${lineCoverage}%`;
-          break;
+          case 'tester':
+            // Testers are rewarded based on test coverage
+            const coverageBonus = (lineCoverage - 50) / 100;  // -0.2 to +0.5
+            reward = baseReward + coverageBonus;
+            reason = `Test coverage: ${lineCoverage}%`;
+            break;
 
-        case 'architect':
-          // Architects are rewarded based on requirements coverage
-          const reqBonus = (requirements.overallCoverage - 70) / 100;
-          reward = baseReward + reqBonus;
-          reason = `Requirements coverage: ${requirements.overallCoverage}%`;
-          break;
+          case 'architect':
+            // Architects are rewarded based on requirements coverage
+            const reqBonus = (requirements.overallCoverage - 70) / 100;
+            reward = baseReward + reqBonus;
+            reason = `Requirements coverage: ${requirements.overallCoverage}%`;
+            break;
 
-        case 'qa':
-          // QA is rewarded based on bug detection
-          reward = baseReward + (criticalIssueCount > 0 ? 0.1 : 0);  // Bonus for finding issues
-          reason = `Overall score: ${overallScore}%`;
-          break;
+          case 'qa':
+            // QA is rewarded based on bug detection
+            reward = baseReward + (criticalIssueCount > 0 ? 0.1 : 0);  // Bonus for finding issues
+            reason = `Overall score: ${overallScore}%`;
+            break;
 
-        default:
-          reward = baseReward;
-          reason = `Overall score: ${overallScore}%`;
-      }
+          default:
+            reward = baseReward;
+            reason = `Overall score: ${overallScore}%`;
+        }
 
-      // Clamp reward
-      reward = Math.max(-1, Math.min(1, reward));
+        // Clamp reward
+        reward = Math.max(-1, Math.min(1, reward));
 
-      // Apply reward if we have a prompt ID
-      if (agent.prompt_id) {
-        await learningSystem.recordOutcome({
-          promptId: agent.prompt_id,
-          projectId: this.config.projectId,
-          agentId: agent.id,
-          outcome: reward >= 0 ? 'success' : 'failure',
-          reward,
-          context: {
-            type: 'architect_review',
-            milestone: this.config.milestone,
-            overallScore,
+        // Apply reward if we have a prompt ID
+        if (agent.prompt_id) {
+          await learningSystem.recordOutcome({
+            promptId: agent.prompt_id,
+            projectId: this.config.projectId,
+            agentId: agent.id,
+            outcome: reward >= 0 ? 'success' : 'failure',
+            reward,
+            context: {
+              type: 'architect_review',
+              milestone: this.config.milestone,
+              overallScore,
+              agentType,
+              reason,
+            },
+          });
+
+          rewardsApplied.push({
             agentType,
+            promptId: agent.prompt_id,
+            reward,
             reason,
-          },
-        });
+          });
 
-        rewardsApplied.push({
-          agentType,
-          promptId: agent.prompt_id,
-          reward,
-          reason,
-        });
-
-        const color = reward >= 0 ? '\x1b[32m' : '\x1b[31m';
-        console.log(`  ${color}${reward >= 0 ? '+' : ''}${reward.toFixed(3)}\x1b[0m ${agentType.padEnd(12)} - ${reason}`);
+          const color = reward >= 0 ? '\x1b[32m' : '\x1b[31m';
+          console.log(`  ${color}${reward >= 0 ? '+' : ''}${reward.toFixed(3)}\x1b[0m ${agentType.padEnd(12)} - ${reason}`);
+        }
       }
-    }
 
-    return rewardsApplied;
+      return rewardsApplied;
+    } catch (error) {
+      console.error(`Failed to apply RL feedback:`, error instanceof Error ? error.message : 'Unknown error');
+      return [];  // Return empty array on error - non-critical operation
+    }
   }
 
   /**
@@ -570,33 +589,38 @@ export class ArchitectAgent extends EventEmitter {
   private async recordOutcome(result: ArchitectReviewResult): Promise<void> {
     if (!this.promptId) return;
 
-    const learningSystem = getLearningSystem();
-    const db = getDatabase();
+    try {
+      const learningSystem = getLearningSystem();
+      const db = getDatabase();
 
-    // Architect is rewarded based on accuracy of review
-    const reward = result.overallPass ? 0.5 : -0.2;
+      // Architect is rewarded based on accuracy of review
+      const reward = result.overallPass ? 0.5 : -0.2;
 
-    await learningSystem.recordOutcome({
-      promptId: this.promptId,
-      projectId: this.config.projectId,
-      agentId: this.agentId,
-      outcome: result.overallPass ? 'success' : 'failure',
-      reward,
-      context: {
-        type: 'architect_self_review',
-        milestone: this.config.milestone,
-        score: result.score,
-        grade: result.grade,
-        criteriaPassCount: Object.values(result.criteria).filter(c => c.pass).length,
-        criticalFixesCount: result.criticalFixes.length,
-      },
-    });
+      await learningSystem.recordOutcome({
+        promptId: this.promptId,
+        projectId: this.config.projectId,
+        agentId: this.agentId,
+        outcome: result.overallPass ? 'success' : 'failure',
+        reward,
+        context: {
+          type: 'architect_self_review',
+          milestone: this.config.milestone,
+          score: result.score,
+          grade: result.grade,
+          criteriaPassCount: Object.values(result.criteria).filter(c => c.pass).length,
+          criticalFixesCount: result.criticalFixes.length,
+        },
+      });
 
-    // Update architect agent status
-    await db.query(
-      `UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [result.overallPass ? 'completed' : 'failed', this.agentId]
-    );
+      // Update architect agent status
+      await db.query(
+        `UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [result.overallPass ? 'completed' : 'failed', this.agentId]
+      );
+    } catch (error) {
+      console.error(`Failed to record architect outcome:`, error instanceof Error ? error.message : 'Unknown error');
+      // Don't throw - this is a non-critical operation
+    }
   }
 
   /**

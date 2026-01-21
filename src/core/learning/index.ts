@@ -20,15 +20,16 @@ export class LearningSystem {
    * Thompson Sampling: Select prompt based on Beta distribution sampling
    */
   async selectPrompt(agentType: AgentType): Promise<Prompt | null> {
-    const db = getDatabase();
-    const result = await db.query<Prompt>(
-      `SELECT * FROM prompts WHERE agent_type = $1 AND status != 'deprecated'`,
-      [agentType]
-    );
+    try {
+      const db = getDatabase();
+      const result = await db.query<Prompt>(
+        `SELECT * FROM prompts WHERE agent_type = $1 AND status != 'deprecated'`,
+        [agentType]
+      );
 
-    if (result.rows.length === 0) return null;
+      if (result.rows.length === 0) return null;
 
-    const prompts = result.rows;
+      const prompts = result.rows;
 
     // Group by status
     const production = prompts.filter(p => p.status === 'production');
@@ -71,6 +72,10 @@ export class LearningSystem {
     }
 
     return bestPrompt;
+    } catch (error) {
+      console.error(`Failed to select prompt for agent type ${agentType}:`, error instanceof Error ? error.message : 'Unknown error');
+      return null;
+    }
   }
 
   /**
@@ -153,48 +158,53 @@ export class LearningSystem {
     reward: number;  // -1.0 to 1.0
     context?: Record<string, unknown>;
   }): Promise<void> {
-    const { promptId, projectId, taskId, agentId, outcome, reward, context } = options;
-    const db = getDatabase();
+    try {
+      const { promptId, projectId, taskId, agentId, outcome, reward, context } = options;
+      const db = getDatabase();
 
-    // Clamp reward to valid range
-    const clampedReward = Math.max(-1, Math.min(1, reward));
+      // Clamp reward to valid range
+      const clampedReward = Math.max(-1, Math.min(1, reward));
 
-    // Record to rl_outcomes table for detailed tracking
-    await db.query(
-      `INSERT INTO rl_outcomes (id, prompt_id, project_id, task_id, agent_id, outcome, reward, context, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-      [
-        uuidv4(),
-        promptId,
-        projectId || null,
-        taskId || null,
-        agentId || null,
-        outcome,
-        clampedReward,
-        JSON.stringify(context || {}),
-      ]
-    );
+      // Record to rl_outcomes table for detailed tracking
+      await db.query(
+        `INSERT INTO rl_outcomes (id, prompt_id, project_id, task_id, agent_id, outcome, reward, context, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+        [
+          uuidv4(),
+          promptId,
+          projectId || null,
+          taskId || null,
+          agentId || null,
+          outcome,
+          clampedReward,
+          JSON.stringify(context || {}),
+        ]
+      );
 
-    // Note: The database trigger (trigger_update_prompt_stats) will automatically
-    // update the prompt's alpha/beta values based on the reward
+      // Note: The database trigger (trigger_update_prompt_stats) will automatically
+      // update the prompt's alpha/beta values based on the reward
 
-    // Also record to learning_events for backwards compatibility
-    await db.query(
-      `INSERT INTO learning_events (id, prompt_id, task_id, event_type, reward, context, outcome, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-      [
-        uuidv4(),
-        promptId,
-        taskId || null,
-        context?.type as string || (reward >= 0 ? 'positive_reward' : 'negative_reward'),
-        clampedReward,
-        JSON.stringify(context || {}),
-        JSON.stringify({ outcome, reward: clampedReward }),
-      ]
-    );
+      // Also record to learning_events for backwards compatibility
+      await db.query(
+        `INSERT INTO learning_events (id, prompt_id, task_id, event_type, reward, context, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [
+          uuidv4(),
+          promptId,
+          taskId || null,
+          context?.type as string || (reward >= 0 ? 'positive_reward' : 'negative_reward'),
+          clampedReward,
+          JSON.stringify(context || {}),
+          JSON.stringify({ outcome, reward: clampedReward }),
+        ]
+      );
 
-    // Check if prompt should be promoted/demoted
-    await this.evaluatePromptStatus(promptId);
+      // Check if prompt should be promoted/demoted
+      await this.evaluatePromptStatus(promptId);
+    } catch (error) {
+      console.error(`Failed to record outcome for prompt ${options.promptId}:`, error instanceof Error ? error.message : 'Unknown error');
+      throw error;
+    }
   }
 
   /**

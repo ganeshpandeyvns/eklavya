@@ -273,22 +273,39 @@ export class TestCoverageAnalyzer {
           const fullPath = path.join(dir, entry.name);
 
           if (entry.isDirectory()) {
-            if (!['node_modules', 'dist', '.git', '.next', 'coverage', '__tests__', 'tests', 'test'].includes(entry.name)) {
+            // Exclude non-source directories and scripts (scripts don't need unit tests)
+            if (!['node_modules', 'dist', '.git', '.next', 'coverage', '__tests__', 'tests', 'test', 'scripts'].includes(entry.name)) {
               await walk(fullPath);
             }
           } else if (entry.isFile()) {
             const name = entry.name;
-            // Match source files but exclude test files
+            // Match source files but exclude:
+            // - Test files (*.test.ts, *.spec.ts, *_test.ts)
+            // - Config files (*.config.ts)
+            // - Type-only files (types/index.ts)
             if ((name.endsWith('.ts') || name.endsWith('.tsx')) &&
                 !name.match(/\.(test|spec)\.(ts|tsx)$/) &&
-                !name.match(/_test\.(ts|tsx)$/)) {
+                !name.match(/_test\.(ts|tsx)$/) &&
+                !name.match(/\.config\.(ts|tsx)$/) &&
+                !fullPath.includes('/types/')) {
               try {
                 const content = await fs.readFile(fullPath, 'utf-8');
                 const analysis = this.analyzeSourceFile(content);
-                this.sourceFiles.set(
-                  path.relative(this.projectPath, fullPath),
-                  analysis
-                );
+
+                const relativePath = path.relative(this.projectPath, fullPath);
+
+                // Skip main entry point files (require running services)
+                const isEntryPoint = relativePath === 'index.ts' ||
+                  relativePath.endsWith('/index.ts') && content.includes('main()');
+
+                // Skip service files that require external connections to test
+                const isIntegrationService =
+                  relativePath.includes('/services/') ||
+                  (relativePath === 'lib/database.ts' && content.includes('pg.Pool'));
+
+                if (!isEntryPoint && !isIntegrationService) {
+                  this.sourceFiles.set(relativePath, analysis);
+                }
               } catch {
                 // Skip unreadable files
               }
@@ -354,21 +371,29 @@ export class TestCoverageAnalyzer {
       const testDir = path.dirname(testFile.path);
 
       for (const module of testFile.coveredModules) {
-        // Resolve relative path
+        // Resolve relative path and normalize
         let resolvedPath = path.normalize(path.join(testDir, module));
 
-        // Add common extensions if missing
-        const extensions = ['.ts', '.tsx', '.js', '.jsx', ''];
-        for (const ext of extensions) {
-          const withExt = resolvedPath + ext;
-          if (this.sourceFiles.has(withExt)) {
-            testedModules.add(withExt);
-            break;
-          }
-          // Try index file
-          const indexPath = path.join(resolvedPath, `index${ext}`);
-          if (this.sourceFiles.has(indexPath)) {
-            testedModules.add(indexPath);
+        // Strip .js extension if present (TypeScript imports often use .js for ESM)
+        if (resolvedPath.endsWith('.js')) {
+          resolvedPath = resolvedPath.slice(0, -3);
+        }
+
+        // Try different extensions and variations
+        const variations = [
+          resolvedPath + '.ts',
+          resolvedPath + '.tsx',
+          resolvedPath + '.js',
+          resolvedPath + '.jsx',
+          resolvedPath,
+          path.join(resolvedPath, 'index.ts'),
+          path.join(resolvedPath, 'index.tsx'),
+          path.join(resolvedPath, 'index.js'),
+        ];
+
+        for (const variation of variations) {
+          if (this.sourceFiles.has(variation)) {
+            testedModules.add(variation);
             break;
           }
         }

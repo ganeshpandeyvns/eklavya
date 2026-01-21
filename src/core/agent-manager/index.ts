@@ -104,16 +104,17 @@ export class AgentManager extends EventEmitter {
    * Spawn a single agent with RL-based prompt selection
    */
   async spawnAgent(options: SpawnAgentOptions): Promise<RLAgent> {
-    const db = getDatabase();
-    const learningSystem = getLearningSystem();
-    const agentId = uuidv4();
-    const workingDir = options.workingDirectory ||
-      path.join(this.projectDir, 'agents', options.type, agentId);
+    try {
+      const db = getDatabase();
+      const learningSystem = getLearningSystem();
+      const agentId = uuidv4();
+      const workingDir = options.workingDirectory ||
+        path.join(this.projectDir, 'agents', options.type, agentId);
 
-    // Select prompt using Thompson Sampling
-    const selectedPrompt = await learningSystem.selectPrompt(options.type);
-    const promptContent = selectedPrompt?.content || this.getDefaultPrompt(options.type);
-    const promptId = selectedPrompt?.id;
+      // Select prompt using Thompson Sampling
+      const selectedPrompt = await learningSystem.selectPrompt(options.type);
+      const promptContent = selectedPrompt?.content || this.getDefaultPrompt(options.type);
+      const promptId = selectedPrompt?.id;
 
     // Create working directory
     await fs.mkdir(workingDir, { recursive: true });
@@ -168,6 +169,12 @@ export class AgentManager extends EventEmitter {
 
     this.emit('agent:spawned', { agent, promptId, promptVersion: selectedPrompt?.version });
     return agent;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to spawn agent of type ${options.type}:`, errorMessage);
+      this.emit('agent:spawn:failed', { type: options.type, error: errorMessage });
+      throw error;
+    }
   }
 
   /**
@@ -203,58 +210,64 @@ export class AgentManager extends EventEmitter {
    * Record agent outcome and apply RL reward/penalty
    */
   async recordAgentOutcome(outcome: AgentOutcome): Promise<void> {
-    const learningSystem = getLearningSystem();
-    const entry = this.agents.get(outcome.agentId);
+    try {
+      const learningSystem = getLearningSystem();
+      const entry = this.agents.get(outcome.agentId);
 
-    if (!entry) {
-      console.warn(`Agent ${outcome.agentId} not found for outcome recording`);
-      return;
-    }
+      if (!entry) {
+        console.warn(`Agent ${outcome.agentId} not found for outcome recording`);
+        return;
+      }
 
-    const { agent, startTime } = entry;
-    const executionTime = Date.now() - startTime;
+      const { agent, startTime } = entry;
+      const executionTime = Date.now() - startTime;
 
-    // Calculate reward based on outcome
-    let reward = this.calculateReward(outcome, agent.type);
+      // Calculate reward based on outcome
+      const reward = this.calculateReward(outcome, agent.type);
 
-    // Apply reward to the prompt
-    if (outcome.promptId) {
-      await learningSystem.recordOutcome({
-        promptId: outcome.promptId,
-        projectId: this.projectId,
-        taskId: outcome.taskId,
-        agentId: outcome.agentId,
-        outcome: outcome.success ? 'success' : 'failure',
+      // Apply reward to the prompt
+      if (outcome.promptId) {
+        await learningSystem.recordOutcome({
+          promptId: outcome.promptId,
+          projectId: this.projectId,
+          taskId: outcome.taskId,
+          agentId: outcome.agentId,
+          outcome: outcome.success ? 'success' : 'failure',
+          reward,
+          context: {
+            agentType: agent.type,
+            ...outcome.metrics,
+            ...outcome.context,
+          },
+        });
+      }
+
+      // Update agent metrics in database
+      const db = getDatabase();
+      await db.query(
+        `UPDATE agents SET
+          metrics = $1,
+          status = $2,
+          updated_at = NOW()
+         WHERE id = $3`,
+        [
+          JSON.stringify(outcome.metrics),
+          outcome.success ? 'completed' : 'failed',
+          outcome.agentId,
+        ]
+      );
+
+      this.emit('agent:outcome', {
+        agent,
+        outcome,
         reward,
-        context: {
-          agentType: agent.type,
-          ...outcome.metrics,
-          ...outcome.context,
-        },
+        executionTimeMs: executionTime,
       });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to record outcome for agent ${outcome.agentId}:`, errorMessage);
+      this.emit('agent:outcome:failed', { agentId: outcome.agentId, error: errorMessage });
     }
-
-    // Update agent metrics in database
-    const db = getDatabase();
-    await db.query(
-      `UPDATE agents SET
-        metrics = $1,
-        status = $2,
-        updated_at = NOW()
-       WHERE id = $3`,
-      [
-        JSON.stringify(outcome.metrics),
-        outcome.success ? 'completed' : 'failed',
-        outcome.agentId,
-      ]
-    );
-
-    this.emit('agent:outcome', {
-      agent,
-      outcome,
-      reward,
-      executionTimeMs: executionTime,
-    });
   }
 
   /**

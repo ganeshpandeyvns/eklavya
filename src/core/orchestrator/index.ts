@@ -69,31 +69,38 @@ export class Orchestrator extends EventEmitter {
    * Initialize the orchestrator and select its prompt via Thompson Sampling
    */
   async initialize(): Promise<void> {
-    const learningSystem = getLearningSystem();
+    try {
+      const learningSystem = getLearningSystem();
 
-    // Select orchestrator prompt using Thompson Sampling
-    const selectedPrompt = await learningSystem.selectPrompt('orchestrator');
-    this.orchestratorPromptId = selectedPrompt?.id;
+      // Select orchestrator prompt using Thompson Sampling
+      const selectedPrompt = await learningSystem.selectPrompt('orchestrator');
+      this.orchestratorPromptId = selectedPrompt?.id;
 
-    // Create orchestrator agent record
-    const db = getDatabase();
-    this.orchestratorAgentId = uuidv4();
+      // Create orchestrator agent record
+      const db = getDatabase();
+      this.orchestratorAgentId = uuidv4();
 
-    await db.query(
-      `INSERT INTO agents (id, project_id, type, status, prompt_id, created_at, updated_at)
-       VALUES ($1, $2, 'orchestrator', 'working', $3, NOW(), NOW())`,
-      [this.orchestratorAgentId, this.projectId, this.orchestratorPromptId]
-    );
+      await db.query(
+        `INSERT INTO agents (id, project_id, type, status, prompt_id, created_at, updated_at)
+         VALUES ($1, $2, 'orchestrator', 'working', $3, NOW(), NOW())`,
+        [this.orchestratorAgentId, this.projectId, this.orchestratorPromptId]
+      );
 
-    this.startTime = Date.now();
+      this.startTime = Date.now();
 
-    // Subscribe to agent messages
-    this.messageBus.on('message', (msg) => this.handleAgentMessage(msg));
+      // Subscribe to agent messages
+      this.messageBus.on('message', (msg) => this.handleAgentMessage(msg));
 
-    this.emit('initialized', {
-      orchestratorId: this.orchestratorAgentId,
-      promptId: this.orchestratorPromptId,
-    });
+      this.emit('initialized', {
+        orchestratorId: this.orchestratorAgentId,
+        promptId: this.orchestratorPromptId,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to initialize orchestrator for project ${this.projectId}:`, errorMessage);
+      this.emit('error', { phase: 'initialize', error: errorMessage });
+      throw error;
+    }
   }
 
   /**
@@ -179,58 +186,71 @@ export class Orchestrator extends EventEmitter {
   }> {
     const startTime = Date.now();
 
-    this.emit('plan:started', {
-      totalPhases: plan.phases.length,
-      totalTasks: plan.totalTasks,
-    });
-
-    for (const phase of plan.phases) {
-      this.emit('phase:started', {
-        phaseNumber: phase.phaseNumber,
-        taskCount: phase.tasks.length,
+    try {
+      this.emit('plan:started', {
+        totalPhases: plan.phases.length,
+        totalTasks: plan.totalTasks,
       });
 
-      // Spawn all agents for this phase in parallel
-      const results = await this.executePhase(phase);
-
-      // Check for failures
-      const failures = results.filter(r => !r.success);
-      if (failures.length > 0) {
-        this.emit('phase:failed', {
+      for (const phase of plan.phases) {
+        this.emit('phase:started', {
           phaseNumber: phase.phaseNumber,
-          failures: failures.map(f => f.taskId),
+          taskCount: phase.tasks.length,
         });
 
-        // Decide whether to continue or abort
-        // For now, we continue with remaining phases
+        // Spawn all agents for this phase in parallel
+        const results = await this.executePhase(phase);
+
+        // Check for failures
+        const failures = results.filter(r => !r.success);
+        if (failures.length > 0) {
+          this.emit('phase:failed', {
+            phaseNumber: phase.phaseNumber,
+            failures: failures.map(f => f.taskId),
+          });
+
+          // Decide whether to continue or abort
+          // For now, we continue with remaining phases
+        }
+
+        this.emit('phase:completed', {
+          phaseNumber: phase.phaseNumber,
+          succeeded: results.filter(r => r.success).length,
+          failed: failures.length,
+        });
       }
 
-      this.emit('phase:completed', {
-        phaseNumber: phase.phaseNumber,
-        succeeded: results.filter(r => r.success).length,
-        failed: failures.length,
+      const duration = Date.now() - startTime;
+      const success = this.failedTasks.size === 0;
+
+      // Record orchestrator outcome
+      await this.recordOrchestratorOutcome(success, duration, plan);
+
+      this.emit('plan:completed', {
+        success,
+        completed: this.completedTasks.size,
+        failed: this.failedTasks.size,
+        duration,
       });
+
+      return {
+        success,
+        completed: this.completedTasks.size,
+        failed: this.failedTasks.size,
+        duration,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to execute plan for project ${this.projectId}:`, errorMessage);
+      this.emit('plan:error', { error: errorMessage });
+
+      return {
+        success: false,
+        completed: this.completedTasks.size,
+        failed: this.failedTasks.size + this.activeTasks.size,
+        duration: Date.now() - startTime,
+      };
     }
-
-    const duration = Date.now() - startTime;
-    const success = this.failedTasks.size === 0;
-
-    // Record orchestrator outcome
-    await this.recordOrchestratorOutcome(success, duration, plan);
-
-    this.emit('plan:completed', {
-      success,
-      completed: this.completedTasks.size,
-      failed: this.failedTasks.size,
-      duration,
-    });
-
-    return {
-      success,
-      completed: this.completedTasks.size,
-      failed: this.failedTasks.size,
-      duration,
-    };
   }
 
   /**
@@ -239,64 +259,76 @@ export class Orchestrator extends EventEmitter {
   private async executePhase(
     phase: ParallelExecutionPlan['phases'][0]
   ): Promise<Array<{ taskId: string; success: boolean; agentId: string }>> {
-    const db = getDatabase();
+    try {
+      const db = getDatabase();
 
-    // Create task records
-    const taskRecords: Task[] = [];
-    for (const taskDef of phase.tasks) {
-      const task: Task = {
-        id: taskDef.id!,
-        projectId: this.projectId,
-        title: taskDef.title,
-        description: taskDef.description,
-        type: taskDef.type,
-        status: 'pending',
-        priority: taskDef.priority || 5,
-        acceptanceCriteria: [],
-        retryCount: 0,
-        maxRetries: 3,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      // Create task records
+      const taskRecords: Task[] = [];
+      for (const taskDef of phase.tasks) {
+        const task: Task = {
+          id: taskDef.id!,
+          projectId: this.projectId,
+          title: taskDef.title,
+          description: taskDef.description,
+          type: taskDef.type,
+          status: 'pending',
+          priority: taskDef.priority || 5,
+          acceptanceCriteria: [],
+          retryCount: 0,
+          maxRetries: 3,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
 
-      await db.query(
-        `INSERT INTO tasks (id, project_id, title, description, type, status, priority, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id) DO UPDATE SET status = 'pending', updated_at = NOW()`,
-        [task.id, task.projectId, task.title, task.description, task.type, task.status, task.priority, task.createdAt, task.updatedAt]
-      );
+        await db.query(
+          `INSERT INTO tasks (id, project_id, title, description, type, status, priority, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO UPDATE SET status = 'pending', updated_at = NOW()`,
+          [task.id, task.projectId, task.title, task.description, task.type, task.status, task.priority, task.createdAt, task.updatedAt]
+        );
 
-      taskRecords.push(task);
-      this.activeTasks.set(task.id, { task });
+        taskRecords.push(task);
+        this.activeTasks.set(task.id, { task });
+      }
+
+      // Spawn agents in parallel
+      const spawnConfigs: SpawnAgentOptions[] = phase.tasks.map(taskDef => ({
+        type: taskDef.agentType,
+        taskId: taskDef.id,
+        taskDescription: `${taskDef.title}\n\n${taskDef.description}`,
+        parentAgentId: this.orchestratorAgentId,
+      }));
+
+      const agents = await this.agentManager.spawnParallelAgents(spawnConfigs);
+
+      // Link agents to tasks
+      for (let i = 0; i < agents.length; i++) {
+        const taskId = phase.tasks[i].id!;
+        const agent = agents[i];
+
+        this.activeTasks.get(taskId)!.agentId = agent.id;
+
+        await db.query(
+          `UPDATE tasks SET assigned_agent_id = $1, status = 'assigned' WHERE id = $2`,
+          [agent.id, taskId]
+        );
+      }
+
+      // Wait for all agents to complete
+      const results = await this.waitForAgents(agents, taskRecords);
+
+      return results;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Failed to execute phase ${phase.phaseNumber}:`, errorMessage);
+
+      // Mark all phase tasks as failed
+      return phase.tasks.map(task => ({
+        taskId: task.id!,
+        success: false,
+        agentId: '',
+      }));
     }
-
-    // Spawn agents in parallel
-    const spawnConfigs: SpawnAgentOptions[] = phase.tasks.map(taskDef => ({
-      type: taskDef.agentType,
-      taskId: taskDef.id,
-      taskDescription: `${taskDef.title}\n\n${taskDef.description}`,
-      parentAgentId: this.orchestratorAgentId,
-    }));
-
-    const agents = await this.agentManager.spawnParallelAgents(spawnConfigs);
-
-    // Link agents to tasks
-    for (let i = 0; i < agents.length; i++) {
-      const taskId = phase.tasks[i].id!;
-      const agent = agents[i];
-
-      this.activeTasks.get(taskId)!.agentId = agent.id;
-
-      await db.query(
-        `UPDATE tasks SET assigned_agent_id = $1, status = 'assigned' WHERE id = $2`,
-        [agent.id, taskId]
-      );
-    }
-
-    // Wait for all agents to complete
-    const results = await this.waitForAgents(agents, taskRecords);
-
-    return results;
   }
 
   /**
@@ -366,44 +398,49 @@ export class Orchestrator extends EventEmitter {
   ): Promise<void> {
     if (!this.orchestratorPromptId || !this.orchestratorAgentId) return;
 
-    const learningSystem = getLearningSystem();
+    try {
+      const learningSystem = getLearningSystem();
 
-    // Calculate parallel efficiency (how well we utilized parallelism)
-    const idealTime = plan.totalTasks * (duration / plan.phases.length);
-    const parallelEfficiency = idealTime / duration;
+      // Calculate parallel efficiency (how well we utilized parallelism)
+      const idealTime = plan.totalTasks * (duration / plan.phases.length);
+      const parallelEfficiency = idealTime / duration;
 
-    // Calculate overall success rate
-    const successRate = this.completedTasks.size / plan.totalTasks;
+      // Calculate overall success rate
+      const successRate = this.completedTasks.size / plan.totalTasks;
 
-    // Calculate reward based on efficiency and success
-    let reward = success ? 0.5 : -0.3;
-    reward += (parallelEfficiency - 1) * 0.2;  // Bonus for parallelism
-    reward += (successRate - 0.8) * 0.3;       // Adjust for success rate
+      // Calculate reward based on efficiency and success
+      let reward = success ? 0.5 : -0.3;
+      reward += (parallelEfficiency - 1) * 0.2;  // Bonus for parallelism
+      reward += (successRate - 0.8) * 0.3;       // Adjust for success rate
 
-    await learningSystem.recordOutcome({
-      promptId: this.orchestratorPromptId,
-      projectId: this.projectId,
-      agentId: this.orchestratorAgentId,
-      outcome: success ? 'success' : 'failure',
-      reward: Math.max(-1, Math.min(1, reward)),
-      context: {
-        type: 'orchestration_complete',
-        totalTasks: plan.totalTasks,
-        completedTasks: this.completedTasks.size,
-        failedTasks: this.failedTasks.size,
-        phases: plan.phases.length,
-        parallelEfficiency,
-        successRate,
-        durationMs: duration,
-      },
-    });
+      await learningSystem.recordOutcome({
+        promptId: this.orchestratorPromptId,
+        projectId: this.projectId,
+        agentId: this.orchestratorAgentId,
+        outcome: success ? 'success' : 'failure',
+        reward: Math.max(-1, Math.min(1, reward)),
+        context: {
+          type: 'orchestration_complete',
+          totalTasks: plan.totalTasks,
+          completedTasks: this.completedTasks.size,
+          failedTasks: this.failedTasks.size,
+          phases: plan.phases.length,
+          parallelEfficiency,
+          successRate,
+          durationMs: duration,
+        },
+      });
 
-    // Update orchestrator agent status
-    const db = getDatabase();
-    await db.query(
-      `UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [success ? 'completed' : 'failed', this.orchestratorAgentId]
-    );
+      // Update orchestrator agent status
+      const db = getDatabase();
+      await db.query(
+        `UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [success ? 'completed' : 'failed', this.orchestratorAgentId]
+      );
+    } catch (error) {
+      console.error(`Failed to record orchestrator outcome:`, error instanceof Error ? error.message : 'Unknown error');
+      // Don't throw - this is a non-critical operation
+    }
   }
 
   /**
