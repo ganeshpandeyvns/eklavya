@@ -6,106 +6,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Eklavya is an autonomous agent orchestration platform using Reinforcement Learning to create self-improving AI agents. The platform follows the principle that **the system should be capable of building itself**.
 
-**Business Model**: Admin (you) runs a software development business. Clients come to you with project requests. You use Eklavya to build their projects efficiently with autonomous AI agents. Agents work 24/7 while you sleep. You review demos, show clients, get feedback, and continue.
+**Business Model**: Admin runs a software development business. Clients submit project requests. Eklavya builds projects with autonomous agents that work 24/7. Admin reviews demos, shows clients, gets feedback, and iterates.
 
-## Admin Operations (Business Features)
+## Prerequisites
 
-### Multi-Project Management
-- Dashboard shows ALL client projects at once
-- Grouped by status: Needs Attention → In Progress → Completed
-- Budget tracking per project with profit margin visibility
+- **Node.js**: 20+
+- **PostgreSQL**: 16 (uses LISTEN/NOTIFY for events)
+- **Redis**: 7 (pub/sub, rate limiting)
+- **Environment**: Copy `.env.example` to `.env` and configure database/Redis credentials
 
-### Smart Notifications (Only When Needed)
-| Level | When | Action |
-|-------|------|--------|
-| 🔴 Critical | Build failed, budget exceeded | SMS + Push |
-| 🟡 Needs Input | Demo ready, approval needed | Push + Email |
-| 🟢 Info | Milestone complete | Push only |
-| ⚪ Silent | Agent progress | Log only |
+## Monorepo Structure
 
-### Escalation Policy
-**Agents STOP and wait when**: Demo ready, architecture approval needed, budget threshold, build failure after 3 retries, external API integration
+Three npm package locations:
+- `package.json` (root) - CLI entry point and demo scripts
+- `src/package.json` (@eklavya/core) - Backend with PostgreSQL, Redis, agent management
+- `web/package.json` - Next.js 14 dashboard
 
-**Agents PROCEED autonomously when**: Writing code within plan, running tests, fixing tests, formatting, minor refactoring, git commits
+**Always run `npm install` in the specific directory you're working in.**
 
-### Availability Mode
-- 🟢 Active (full notifications)
-- 🟡 Busy (urgent only)
-- 😴 Away (critical only) - agents keep working, queue decisions
-- 🔴 DND (emergencies only)
+## Development Commands
 
-### Client Approval Flow (Option A)
-```
-Demo Ready → YOU review first → YOU show to client → Client feedback → YOU decide
-                   │                    │                   │              │
-              "Looks good"         Screen share        "Love it!" or   Continue/
-                                   or send link        "Change X"      Adjust/Skip
-```
-You control the client relationship. Clients never interact with the system directly.
-
-### Two Project Types
-
-**1. New Project (From Scratch)**
-```
-Client: "I have an idea"
-→ Describe project → Generate architecture → Admin approves → Build Demo → Show client → Iterate
+### Root (CLI & Demo Scripts)
+```bash
+npm run cli                  # Run Eklavya CLI
+npm run demo:6               # Run demo 6 tester
+npm run demo:7               # Run demo 7 tester
+npm run demo:8               # Run demo 8 tester
 ```
 
-**2. Existing Project (Import & Fix)**
-```
-Client: "I have code, it's stuck"
-→ Import codebase → Analyze & health report → Eklavya asks questions → Recovery plan → Admin approves → Build Demo → Show client → Iterate
-```
-
-For existing projects, Eklavya:
-- Analyzes codebase health (tech stack, structure, issues)
-- Identifies what's working vs what needs attention
-- Asks the right questions to understand goals
-- Generates a recovery/completion plan
-- Prioritizes fixes based on client needs
-
-Both flows converge at: Demo → Client Feedback → Build cycle
-
-### Demo Strategy (Sales-Focused)
-
-**Pre-Contract Demos (Win the client):**
-```
-DEMO₀ "The Wow Demo"        DEMO₁ "The Trust Demo"         CONTRACT
-  │                              │                             │
-  ▼                              ▼                             ▼
-Beautiful UI                 Core feature WORKS            Client signs!
-Smooth animations            Real-ish data flow
-Clickable prototype          Happy path complete
-(fake data, no backend)      (still mock backend)
-
-Time: 20-30 min              Time: 30-45 min
-Cost: $8-15                  Cost: $15-25
-Creates: 40% foundation      Adds: 20% more foundation
+### Backend Core (`src/`)
+```bash
+cd src && npm install        # Install backend dependencies
+cd src && npm run build      # Compile TypeScript
+cd src && npm run dev        # Watch mode development (tsx)
+cd src && npm run start      # Run compiled dist/index.js
+cd src && npm run test       # Run all Vitest tests
+cd src && npm run test:coverage  # Tests with coverage
+cd src && npm run lint       # ESLint check
+cd src && npm run db:migrate # Run database migrations
+cd src && npm run db:seed    # Seed prompt data
 ```
 
-**Always tell admin BEFORE building what demo will contain:**
-- What screens/features WILL be shown
-- What will NOT be included (saves for later)
-- Scaffolding this demo creates (reused in real build)
-- Estimated time and cost
+**Running a single test:**
+```bash
+cd src && npx vitest run core/learning/index.test.ts    # Run specific test file
+cd src && npx vitest run -t "should create"             # Run tests matching pattern
+cd src && npx vitest watch core/learning/               # Watch mode for directory
+```
 
-**Post-Contract Demos (Optional progress checks):**
-- Demo₂+ at major milestones
-- Admin can skip if confident
-- Real build happens after contract
+### Web Dashboard (`web/`)
+```bash
+cd web && npm install        # Install frontend dependencies
+cd web && npm run dev        # Start Next.js dev server (port 3000)
+cd web && npm run build      # Production build
+cd web && npm run start      # Start production server
+cd web && npm run lint       # ESLint check
+```
 
-**Scaffolding Reuse:**
-- Demo₀ creates 40% of foundation (UI, routing, design system)
-- Demo₁ adds 20% more (core feature, data flow)
-- Full build completes remaining 40% (auth, all features, tests)
-- Pre-contract demos are NOT wasted - they become project foundation
+### Demo Scripts (from repo root)
+```bash
+./scripts/run-dev-server.sh   # Start web frontend
+./scripts/run-demo-tester.sh  # Verify demo works
+./scripts/run-overnight.sh    # Full overnight autonomous build
+```
 
-## Documentation Structure
+## Documentation
 
 | Document | Purpose |
 |----------|---------|
-| `EKLAVYA_COMPLETE_SPEC.md` | Complete technical specification for building Eklavya |
+| `EKLAVYA_COMPLETE_SPEC.md` | Complete technical specification |
 | `AGENT_PROMPTS.md` | Full system prompts for all 10 agent types |
+| `ARCHITECTURE.md` | System architecture details |
+| `ROADMAP.md` | Development roadmap |
 | `eklavya.md` | Original vision document |
 
 ## Core Architecture
@@ -131,54 +103,21 @@ Each agent is a Claude Code process with:
 | Monitor | Health checks, alerting | Read logs, metrics |
 | Mentor | Research, guidance, encouragement | Web search, docs |
 
+## Agent Escalation Policy
+
+**Agents STOP and wait when**: Demo ready, architecture approval needed, budget threshold, build failure after 3 retries, external API integration
+
+**Agents PROCEED autonomously when**: Writing code within plan, running tests, fixing tests, formatting, minor refactoring, git commits
+
 ## Technology Stack
 
-- **Runtime**: Node.js 20+ with TypeScript
+- **Runtime**: Node.js 20+ with TypeScript (ES modules)
 - **Database**: PostgreSQL 16 (main storage, LISTEN/NOTIFY for events)
 - **Cache/Queue**: Redis 7 (pub/sub, rate limiting)
 - **AI Provider**: Anthropic Claude (claude-sonnet-4-20250514 default)
-- **Web Framework**: Next.js 14
+- **Web Framework**: Next.js 14 (App Router)
 - **Testing**: Vitest (unit), Playwright (E2E)
-
-## Monorepo Structure
-
-This is a monorepo with two npm packages:
-- `package.json` (root) - Minimal, mainly for repo metadata
-- `src/package.json` (@eklavya/core) - Backend with PostgreSQL, Redis, agent management
-- `web/package.json` - Next.js 14 dashboard
-
-Always run `npm install` in the specific directory you're working in.
-
-## Development Commands
-
-### Backend Core (`src/`)
-```bash
-cd src && npm install        # Install backend dependencies
-cd src && npm run build      # Compile TypeScript
-cd src && npm run dev        # Watch mode development (tsx)
-cd src && npm run start      # Run compiled dist/index.js
-cd src && npm run test       # Run Vitest tests
-cd src && npm run test:coverage  # Tests with coverage
-cd src && npm run lint       # ESLint check
-cd src && npm run db:migrate # Run database migrations
-cd src && npm run db:seed    # Seed prompt data
-```
-
-### Web Dashboard (`web/`)
-```bash
-cd web && npm install        # Install frontend dependencies
-cd web && npm run dev        # Start Next.js dev server (port 3000)
-cd web && npm run build      # Production build
-cd web && npm run start      # Start production server
-cd web && npm run lint       # ESLint check
-```
-
-### Demo Scripts (from repo root)
-```bash
-./scripts/run-dev-server.sh   # Start web frontend
-./scripts/run-demo-tester.sh  # Verify demo works
-./scripts/run-overnight.sh    # Full overnight autonomous build
-```
+- **Styling**: Tailwind CSS
 
 ## Project Structure
 
@@ -186,13 +125,30 @@ cd web && npm run lint       # ESLint check
 eklavya/
 ├── src/                           # Backend core (@eklavya/core)
 │   ├── core/
-│   │   ├── agent-manager/         # Agent lifecycle (spawns Claude Code processes)
+│   │   ├── agent-manager/         # Agent lifecycle (lifecycle.ts spawns Claude Code processes)
 │   │   ├── message-bus/           # Redis pub/sub + PostgreSQL persistence
-│   │   ├── learning/              # Thompson Sampling for prompt selection
-│   │   └── checkpoint/            # State persistence
+│   │   ├── learning/              # Thompson Sampling for prompt selection (metrics.ts)
+│   │   ├── checkpoint/            # State persistence
+│   │   ├── orchestrator/          # Project coordination, parallel execution
+│   │   ├── coordination/          # Multi-agent coordination
+│   │   ├── workflow/              # Workflow engine (engine.ts, auto-trigger.ts)
+│   │   ├── task-queue/            # Task management and queuing
+│   │   ├── notifications/         # Smart notification system
+│   │   ├── activity/              # Activity tracking
+│   │   ├── progress/              # Progress tracking
+│   │   ├── demos/                 # Demo management (verification, approval, feedback)
+│   │   ├── cost/                  # Budget and cost tracking
+│   │   ├── self-build/            # Eklavya building itself (planner, executor)
+│   │   ├── architect-agent/       # Architecture design (quality-analyzer, requirements-mapper)
+│   │   ├── tester-agent/          # Test execution
+│   │   ├── qa-agent/              # E2E and user flow validation
+│   │   ├── mentor-agent/          # Research, guidance
+│   │   ├── monitor-agent/         # Health checks, alerting
+│   │   └── index.ts               # Exports all core modules
 │   ├── types/index.ts             # Zod schemas for all entities
-│   ├── api/index.ts               # API entry point
-│   ├── lib/                       # Database, utilities
+│   ├── lib/
+│   │   ├── database.ts            # PostgreSQL connection
+│   │   └── cache.ts               # Redis cache
 │   └── index.ts                   # Main entry point
 ├── web/                           # Next.js 14 dashboard
 │   └── src/
@@ -200,19 +156,23 @@ eklavya/
 │       │   ├── page.tsx           # Dashboard home
 │       │   ├── new/page.tsx       # New project form
 │       │   ├── import/page.tsx    # Import existing project
-│       │   └── projects/page.tsx  # Projects list
+│       │   ├── projects/          # Projects list and detail ([id]/page.tsx)
+│       │   ├── learning/page.tsx  # Learning system dashboard
+│       │   └── settings/page.tsx  # Settings
 │       ├── components/
-│       │   ├── dashboard/         # StatsCards, ProjectCard, ActivityFeed, AgentGrid
+│       │   ├── dashboard/         # StatsCards, ProjectCard, ActivityFeed, AgentGrid, AgentStatus
 │       │   ├── layout/            # Header, Sidebar
 │       │   └── chat/              # ChatInterface
 │       ├── data/mock.ts           # Mock data for demos
 │       ├── lib/                   # Utils, API client
 │       └── types/index.ts         # Frontend type definitions
-│   └── tests/                     # Playwright E2E tests
+│   └── tests/                     # Playwright E2E tests (demo-verification.ts)
 ├── scripts/                       # Autonomous operation scripts
 │   ├── run-dev-server.sh          # Start web frontend
 │   ├── run-demo-tester.sh         # Verify demo is ready
-│   └── run-overnight.sh           # Full overnight build
+│   ├── run-overnight.sh           # Full overnight build
+│   ├── run-demo-workflow.sh       # Run demo workflow
+│   └── manual-demo*-verification.sh  # Manual verification scripts
 ├── prompts/                       # Agent prompt templates
 └── projects/                      # User projects (isolated)
 ```
